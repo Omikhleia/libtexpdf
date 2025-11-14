@@ -58,7 +58,6 @@ extern int compat_mode;
 #include "cff_limits.h"
 #include "cff_types.h"
 #include "cid.h"
-#include "cid_p.h"
 #include "cidtype0.h"
 #include "cidtype2.h"
 #include "cmap.h"

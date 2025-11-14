@@ -27,7 +27,6 @@ libtexpdf_la_SOURCES = \
 	cid_basefont.h \
 	cid.c \
 	cid.h \
-	cid_p.h \
 	cidtype0.c \
 	cidtype0.h \
 	cidtype2.c \
@@ -143,7 +142,6 @@ pkginclude_HEADERS = \
 	cff_types.h \
 	cid_basefont.h \
 	cid.h \
-	cid_p.h \
 	cidtype0.h \
 	cidtype2.h \
 	cmap.h \
