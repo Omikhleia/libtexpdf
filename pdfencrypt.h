@@ -2,9 +2,11 @@
 
     This is dvipdfmx, an eXtended version of dvipdfm by Mark A. Wicks.
 
-    Copyright (C) 2007-2012 by Jin-Hwan Cho and Shunsaku Hirata,
+    Copyright (C) 2002-2020 by Jin-Hwan Cho and Shunsaku Hirata,
     the dvipdfmx project team.
     
+    Copyright (C) 2014-2025 by The SILE Typesetter (as libtexpdf).
+
     This program is free software; you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
     the Free Software Foundation; either version 2 of the License, or
@@ -24,16 +26,22 @@
 #define _PDFENCRYPT_H_
 
 #include "pdfobj.h"
+#include "pdfdoc.h"
 
-#define MAX_PWD_LEN 128
+#define MAX_PWD_LEN 127
 
-extern void texpdf_enc_set_verbose (void);
-extern pdf_obj *texpdf_enc_id_array (void);
-extern void texpdf_enc_compute_id_string (char *dviname, char *pdfname);
-extern void texpdf_enc_set_label (unsigned long label);
-extern void texpdf_enc_set_generation (unsigned generation);
-extern void texpdf_enc_set_passwd (unsigned size, unsigned perm, const char *owner, const char *user);
-extern void pdf_encrypt_data (unsigned char *data, unsigned long len);
-extern pdf_obj *pdf_encrypt_obj (void);
+typedef struct pdf_sec pdf_sec;
+extern pdf_sec *pdf_enc_init (const unsigned char *id,
+                              int keybits, uint32_t permission,
+                              const char *opasswd, const char *upasswd,
+                              int use_aes, int encrypt_metadata);
+extern void     pdf_enc_close (pdf_sec **p_sec);
+
+extern void     pdf_enc_set_label      (pdf_sec *p_sec, unsigned label);
+extern void     pdf_enc_set_generation (pdf_sec *p_sec, unsigned generation);
+extern void     pdf_encrypt_data (pdf_sec *p_sec, const unsigned char *plain, size_t plain_len,
+                                  unsigned char **cipher, size_t *cipher_len);
+extern pdf_obj *pdf_enc_get_encrypt_dict (pdf_sec *p_sec);
+extern pdf_obj *pdf_enc_get_extension_dict (pdf_sec *p_sec);
 
 #endif /* _PDFENCRYPT_H_ */

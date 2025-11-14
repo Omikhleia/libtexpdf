@@ -1,9 +1,9 @@
 /* This is dvipdfmx, an eXtended version of dvipdfm by Mark A. Wicks.
-
-    Copyright (C) 2007-2014 by Jin-Hwan Cho and Shunsaku Hirata,
+    Copyright (C) 2002-2020 by Jin-Hwan Cho and Shunsaku Hirata,
     the dvipdfmx project team.
     
     Copyright (C) 1998, 1999 by Mark A. Wicks <mwicks@kettering.edu>
+    Copyright (C) 2014-2025 by The SILE Typesetter (as libtexpdf).
 
     This program is free software; you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -20,26 +20,23 @@
     Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA.
 */
 
-#ifdef HAVE_CONFIG_H
-#include <config.h>
-#endif
-
-#if defined(WIN32)
-#include <windows.h>
-#include <wchar.h>
-#define PATH_MAX 2048 // do not use MAX_PATH as it's too small
-#endif
-
 #include "libtexpdf.h"
 
-#include <time.h>
-#include <unistd.h>
-#include <sys/stat.h>
-#include <dirent.h>
+#ifdef _MSC_VER
+#include <kpathsea/dirent.h>
+#endif
 
+#if defined(MIKTEX_WINDOWS)
+#include <miktex/unxemu.h>
+#endif
+
+#include <time.h>
+
+#include "system.h"
 #include "error.h"
 #include "mem.h"
 
+#include "dpxconf.h"
 #include "dpxutil.h"
 #include "mfileio.h"
 
@@ -47,8 +44,9 @@
 #include "dpxcrypt.h"
 #define MAX_KEY_LEN 16
 
+#include <kpathsea/lib.h>
 #include <string.h>
-#if defined(WIN32) && !defined(__MINGW32__)
+#ifdef WIN32
 #include <io.h>
 #include <process.h>
 #include <wchar.h>
@@ -64,49 +62,22 @@
 #endif
 #endif
 
-#define xcalloc calloc
-#define xgetcwd getcwd
-#define xstrdup strdup
-
-static int verbose = 0;
-int keep_cache = 0;
-
-void
-dpx_file_set_verbose (void)
-{
-  verbose++;
-}
-
+#if defined(MIKTEX) || defined(TESTCOMPILE)
+#if defined(__APPLE__)
+#  include <sys/syslimits.h>
+#endif
+#if !defined(PATH_MAX)
+#  define PATH_MAX 256
+#endif
+#endif /* MIKTEX || TESTCOMPILE */
 
 /* Kpathsea library does not check file type. */
 static int qcheck_filetype (const char *fqpn, dpx_res_type type);
-
-#if defined(WIN32)
-wchar_t *
-get_wstring_from_mbstring(int cp, const char *mbstr, wchar_t *wstr)
-{
-  int len;
-
-  len = MultiByteToWideChar(cp, 0, mbstr, -1, wstr, 0);
-  if (len==0) {
-    ERROR("cannot convert string to wide string");
-  }
-  if (wstr==NULL) {
-    wstr = malloc(sizeof(wchar_t)*(len+1));
-  }
-  len = MultiByteToWideChar(cp, 0, mbstr, -1, wstr, len+1);
-  if (len==0) {
-    ERROR("cannot convert multibyte string to wide string");
-  }
-  return wstr;
-}
-#endif
 
 /* For testing MIKTEX enabled compilation */
 #if defined(TESTCOMPILE) && !defined(MIKTEX)
 #  define MIKTEX        1
 #  define PATH_SEP_CHR  '/'
-#  define _MAX_PATH     256
 
 static int
 miktex_get_acrobat_font_dir (char *buf)
@@ -124,7 +95,7 @@ miktex_find_file (const char *filename, const char *dirlist, char *buf)
   fqpn = kpse_path_search(dirlist, filename, 0);
   if (!fqpn)
     return  0;
-  if (strlen(fqpn) > _MAX_PATH)
+  if (strlen(fqpn) > PATH_MAX)
     r = 0;
   else {
     strcpy(buf, fqpn);
@@ -147,7 +118,7 @@ miktex_find_app_input_file (const char *progname, const char *filename, char *bu
 
   if (!fqpn)
     return  0;
-  if (strlen(fqpn) > _MAX_PATH)
+  if (strlen(fqpn) > PATH_MAX)
     r = 0;
   else {
     strcpy(buf, fqpn);
@@ -168,7 +139,7 @@ miktex_find_psheader_file (const char *filename, char *buf)
 
   if (!fqpn)
     return  0;
-  if (strlen(fqpn) > _MAX_PATH)
+  if (strlen(fqpn) > PATH_MAX)
     r = 0;
   else {
     strcpy(buf, fqpn);
@@ -181,18 +152,38 @@ miktex_find_psheader_file (const char *filename, char *buf)
 
 #endif /* TESTCOMPILE */
 
-#ifdef  MIKTEX
+#ifdef  MIKTEX_NO_KPATHSEA
 #ifndef PATH_SEP_CHR
 #  define PATH_SEP_CHR '\\'
 #endif
-static char  _tmpbuf[_MAX_PATH+1];
+static char  _tmpbuf[PATH_MAX+1];
 #endif /* MIKTEX */
 
+#if defined(_WIN32)
+#undef stat
+#define stat _stat
+extern int utf8name_failed;
+int fsyscp_stat(const char *path, struct stat *buffer)
+{
+  wchar_t *wpath;
+  int     ret;
+  wpath = get_wstring_from_mbstring(file_system_codepage,
+          path, wpath = NULL);
+  if (wpath == NULL)
+    return -1;
+  ret = _wstat(wpath, buffer);
+  free(wpath);
+  return ret;
+}
+#endif /* _WIN32 */
+
+#define CMDBUFSIZ 1024
 static int exec_spawn (char *cmd)
 {
   char **cmdv, **qv;
   char *p, *pp;
-  char buf[1024];
+  char buf[CMDBUFSIZ];
+  int  charcnt;
   int  i, ret = -1;
 #ifdef WIN32
   wchar_t **cmdvw, **qvw;
@@ -211,11 +202,12 @@ static int exec_spawn (char *cmd)
       i++;
     p++;
   }
-  cmdv = xcalloc (i + 2, sizeof (char *));
+  cmdv = xcalloc (i + 4, sizeof (char *));
   p = cmd;
   qv = cmdv;
   while (*p) {
     pp = buf;
+    charcnt = 0;
     if (*p == '"') {
       p++;
       while (*p != '"') {
@@ -223,6 +215,10 @@ static int exec_spawn (char *cmd)
           goto done;
         }
         *pp++ = *p++;
+        charcnt++;
+        if (charcnt > CMDBUFSIZ - 1) {
+          ERROR("Too long a command line.");
+        }
       }
       p++;
     } else if (*p == '\'') {
@@ -232,6 +228,10 @@ static int exec_spawn (char *cmd)
           goto done;
         }
         *pp++ = *p++;
+        charcnt++;
+        if (charcnt > CMDBUFSIZ - 1) {
+          ERROR("Too long a command line.");
+        }
       }
       p++;
     } else {
@@ -243,22 +243,26 @@ static int exec_spawn (char *cmd)
                  goto done;
              }
              *pp++ = *p++;
+             charcnt++;
+             if (charcnt > CMDBUFSIZ - 1) {
+               ERROR("Too long a command line.");
+             }
           }
           p++;
         } else {
           *pp++ = *p++;
+          charcnt++;
+          if (charcnt > CMDBUFSIZ - 1) {
+            ERROR("Too long a command line.");
+          }
         }
       }
     }
     *pp = '\0';
-#if defined(WIN32) && !defined(__MINGW32__)
-    if (strchr (buf, ' ') || strchr (buf, '\t')) {
-      *qv = xcalloc (strlen(buf) + 3, sizeof (char));
-      **qv = '\0';
-      strcat(*qv, "\"");
-      strcat(*qv, buf);
-      strcat(*qv, "\"");
-    } else
+#ifdef WIN32
+    if (strchr (buf, ' ') || strchr (buf, '\t'))
+      *qv = concat3 ("\"", buf, "\"");
+    else
 #endif
       *qv = xstrdup (buf);
 /*
@@ -268,21 +272,39 @@ static int exec_spawn (char *cmd)
       p++;
     qv++;
   }
+  *qv = NULL;
+
 #ifdef WIN32
-  cmdvw = xcalloc (i + 2, sizeof (wchar_t *));
-  qv = cmdv;
-  qvw = cmdvw;
-  while (*qv) {
-// #ifdef __MINGW32__ /* Hack */
-    get_wstring_from_mbstring(CP_UTF8,*qv,*qvw=NULL);
-// #else
-//     *qvw = get_wstring_from_fsyscp(*qv, *qvw=NULL);
-// #endif
-    qv++;
-    qvw++;
+#if defined(MIKTEX)
+  ret = _spawnvp(_P_WAIT, *cmdv, (const char* const*)cmdv); 
+#else
+  cmdvw = xcalloc (i + 4, sizeof (wchar_t *));
+  if (utf8name_failed == 0) {
+    qv = cmdv;
+    qvw = cmdvw;
+    while (*qv) {
+      *qvw = get_wstring_from_fsyscp(*qv, *qvw=NULL);
+      qv++;
+      qvw++;
+    }
+    *qvw = NULL;
+    ret = _wspawnvp (_P_WAIT, *cmdvw, (const wchar_t* const*) cmdvw);
+  } else {
+    int tmpcp;
+    tmpcp = file_system_codepage;
+    file_system_codepage = win32_codepage;
+    qv = cmdv;
+    qvw = cmdvw;
+    while (*qv) {
+      *qvw = get_wstring_from_fsyscp(*qv, *qvw=NULL);
+      qv++;
+      qvw++;
+    }
+    *qvw = NULL;
+    file_system_codepage = tmpcp;
+    utf8name_failed = 0;
+    ret = _wspawnvp (_P_WAIT, *cmdvw, (const wchar_t* const*) cmdvw);
   }
-  *qvw = NULL;
-  ret = _wspawnvp (_P_WAIT, *cmdvw, (const wchar_t* const*) cmdvw);
   if (cmdvw) {
     qvw = cmdvw;
     while (*qvw) {
@@ -291,6 +313,7 @@ static int exec_spawn (char *cmd)
     }
     free (cmdvw);
   }
+#endif
 #else
   i = fork ();
   if (i < 0)
@@ -316,7 +339,6 @@ done:
   return ret;
 }
 
-#if 0
 /* ensuresuffix() returns a copy of basename if sfx is "". */
 static char *
 ensuresuffix (const char *basename, const char *sfx)
@@ -330,6 +352,378 @@ ensuresuffix (const char *basename, const char *sfx)
     strcat(p, sfx);
 
   return  p;
+}
+
+#ifdef  MIKTEX_NO_KPATHSEA
+static char *
+dpx_find__app__xyz (const char *filename,
+                    const char *suffix, int is_text)
+{
+  char  *fqpn = NULL;
+  int    r;
+  char  *q;
+
+  q = ensuresuffix(filename, suffix);
+  r = miktex_find_app_input_file("dvipdfmx", q, _tmpbuf);
+  if (!r && strcmp(q, filename))
+    r = miktex_find_app_input_file("dvipdfmx", filename, _tmpbuf);
+  if (r) {
+    fqpn = NEW(strlen(_tmpbuf) + 1, char);
+    strcpy(fqpn, _tmpbuf);
+  }
+  RELEASE(q);
+
+  return  fqpn;
+}
+
+static char *
+dpx_foolsearch (const char  *foolname,
+                const char  *filename,
+                int          is_text)
+{
+  char  *fqpn = NULL;
+  int    r;
+
+  r = miktex_find_app_input_file(foolname, filename, _tmpbuf);
+  if (r) {
+    fqpn = NEW(strlen(_tmpbuf) + 1, char);
+    strcpy(fqpn, _tmpbuf);
+  }
+
+  return  fqpn;
+}
+#else /* !MIKTEX */
+#  define TDS11DOC "http://www.tug.org/ftp/tex/tds-1.1/tds.html#Fonts"
+static void
+insistupdate (const char      *filename,
+              const char      *fqpn,
+              const char      *foolname,
+              kpse_file_format_type foolformat,
+              kpse_file_format_type realformat)
+{
+#if defined(MIKTEX)
+  /* users are not fools */
+#else
+  kpse_format_info_type *fif;
+  kpse_format_info_type *fir;
+  if (dpx_conf.verbose_level < 1)
+    return;
+  fif = &kpse_format_info[foolformat];
+  fir = &kpse_format_info[realformat];
+  WARN("File name=\"%s\" format=\"%s\" might be found in different location than I expected:",
+       filename, fir->type);
+  WARN(">>   %s", fqpn);
+  WARN(">> Please adjust your TEXMF as conformant with:");
+  WARN(">>   " TDS11DOC);
+  WARN(">> I searched it with fooling kpathsea as progname=\"%s\" format=\"%s\".",
+       foolname, fif->type);
+  WARN(">> Default search path for this format file is:");
+  WARN(">>   %s", fir->default_path);
+  WARN(">> Please read \"README\" file.");
+#endif
+}
+
+static char *
+dpx_find__app__xyz (const char *filename,
+                    const char *suffix, int is_text)
+{
+  char  *fqpn = NULL;
+  char  *q;
+
+  q    = ensuresuffix(filename, suffix);
+  fqpn = kpse_find_file(q,
+                         (is_text ?
+                            kpse_program_text_format : kpse_program_binary_format), 0);
+  if (!fqpn && strcmp(q, filename))
+    fqpn = kpse_find_file(filename,
+                           (is_text ?
+                              kpse_program_text_format : kpse_program_binary_format), 0);   
+  RELEASE(q);
+
+  return  fqpn;
+}
+
+static char *
+dpx_foolsearch (const char  *foolname,
+                const char  *filename,
+                int          is_text)
+{
+  char  *fqpn = NULL;
+
+  kpse_reset_program_name(foolname);
+  fqpn = kpse_find_file  (filename,
+                          (is_text ?
+                              kpse_program_text_format :
+                              kpse_program_binary_format),
+                          false);
+  kpse_reset_program_name("dvipdfmx");
+
+  return  fqpn;
+}
+#endif /* MIKTEX */
+
+static char *dpx_find_fontmap_file  (const char *filename);
+static char *dpx_find_agl_file      (const char *filename);
+static char *dpx_find_sfd_file      (const char *filename);
+static char *dpx_find_cmap_file     (const char *filename);
+static char *dpx_find_enc_file      (const char *filename);
+static char *dpx_find_iccp_file     (const char *filename);
+
+FILE *
+dpx_open_file (const char *filename, dpx_res_type type)
+{
+  FILE  *fp   = NULL;
+  char  *fqpn = NULL;
+
+  switch (type) {
+  case DPX_RES_TYPE_FONTMAP:
+    fqpn = dpx_find_fontmap_file(filename);
+    if (dpx_conf.verbose_level > 0) {
+      if (fqpn != NULL)
+        MESG(fqpn);
+    }
+    break;
+  case DPX_RES_TYPE_T1FONT:
+    fqpn = dpx_find_type1_file(filename);
+    break;
+  case DPX_RES_TYPE_TTFONT:
+    fqpn = dpx_find_truetype_file(filename);
+    break;
+  case DPX_RES_TYPE_OTFONT:
+    fqpn = dpx_find_opentype_file(filename);
+    break;
+  case DPX_RES_TYPE_PKFONT:
+    break;
+  case DPX_RES_TYPE_CMAP:
+    fqpn = dpx_find_cmap_file(filename);
+    break;
+  case DPX_RES_TYPE_ENC:
+    fqpn = dpx_find_enc_file(filename);
+    break;
+  case DPX_RES_TYPE_SFD:
+    fqpn = dpx_find_sfd_file(filename);
+    break;
+  case DPX_RES_TYPE_AGL:
+    fqpn = dpx_find_agl_file(filename);
+    break;
+  case DPX_RES_TYPE_ICCPROFILE:
+    fqpn = dpx_find_iccp_file(filename);
+    break;
+  case DPX_RES_TYPE_DFONT:
+    fqpn = dpx_find_dfont_file(filename);
+    break;
+  case DPX_RES_TYPE_BINARY:
+    fqpn = dpx_find__app__xyz(filename, "", 0);
+    break;
+  case DPX_RES_TYPE_TEXT:
+    fqpn = dpx_find__app__xyz(filename, "", 1);
+    break;
+  }
+  if (fqpn) {
+    fp = MFOPEN(fqpn, FOPEN_RBIN_MODE);
+    RELEASE(fqpn);
+  }
+
+  return  fp;
+}
+
+
+static char *
+dpx_find_iccp_file (const char *filename)
+{
+  char  *fqpn = NULL;
+
+  fqpn = dpx_find__app__xyz(filename, "", 0);
+  if (fqpn || strrchr(filename, '.'))
+    return  fqpn;
+
+  fqpn = dpx_find__app__xyz(filename, ".icc", 0);
+  if (fqpn)
+    return  fqpn;
+
+  fqpn = dpx_find__app__xyz(filename, ".icm", 0);
+
+  return  fqpn;
+}
+
+
+static char *
+dpx_find_fontmap_file (const char *filename)
+{
+  char  *fqpn = NULL;
+  char  *q;
+
+  q = ensuresuffix(filename, ".map");
+#ifdef  MIKTEX_NO_KPATHSEA
+  fqpn = dpx_find__app__xyz(q, ".map", 1);
+#else /* !MIKTEX */
+  fqpn = kpse_find_file(q, kpse_fontmap_format, 0);
+  if (!fqpn) {
+    fqpn = dpx_find__app__xyz(q, ".map", 1);
+    if (fqpn)
+      insistupdate(q, fqpn, "dvipdfmx",
+                   kpse_program_text_format, kpse_fontmap_format); 
+  }
+#endif /* MIKETEX */
+  RELEASE(q);
+
+  return  fqpn;
+}
+
+
+static char *
+dpx_find_agl_file (const char *filename)
+{
+  char  *fqpn = NULL;
+  char  *q;
+
+  q = ensuresuffix(filename, ".txt");
+#ifdef  MIKTEX_NO_KPATHSEA
+  fqpn = dpx_find__app__xyz(q, ".txt", 1);
+#else /* !MIKTEX */
+  fqpn = kpse_find_file(q, kpse_fontmap_format, 0);
+  if (!fqpn) {
+    fqpn = dpx_find__app__xyz(q, ".txt", 1);
+    if (fqpn)
+      insistupdate(q, fqpn, "dvipdfmx",
+                   kpse_program_text_format, kpse_fontmap_format); 
+  }
+#endif /* MIKETEX */
+  RELEASE(q);
+
+  return  fqpn;
+}
+
+
+/* cmap.sty put files into tex/latex/cmap */
+static char *
+dpx_find_cmap_file (const char *filename)
+{
+  char  *fqpn = NULL;
+  static const char *fools[] = {
+    "cmap", "tex", NULL
+  };
+  int    i;
+
+#if  defined(MIKTEX_NO_KPATHSEA)
+  /* Find in Acrobat's Resource/CMap dir */
+  {
+    char  _acrodir[PATH_MAX+1];
+    char  *q;
+    int    r;
+
+    memset(_acrodir, 0, PATH_MAX+1);
+    r = miktex_get_acrobat_font_dir(_acrodir);
+    if (r &&
+        strlen(_acrodir) > strlen("Font")) {
+      /* ....\Font\ */
+      q = strrchr(_acrodir, PATH_SEP_CHR);
+      if (q && q[1] == '\0')
+        q[0] = '\0';
+      q = strrchr(_acrodir, PATH_SEP_CHR);
+      if (q && !strcmp(q + 1, "Font")) {
+        sprintf(q, "%cCMap%c", PATH_SEP_CHR, PATH_SEP_CHR);
+        r = miktex_find_file(filename, _acrodir, _tmpbuf);
+        if (r) {
+          fqpn = NEW(strlen(_tmpbuf) + 1, char);
+          strcpy(fqpn, _tmpbuf);
+        }
+      }
+    }
+    memset(_tmpbuf, 0, PATH_MAX+1);
+  }
+#else
+  fqpn = kpse_find_file(filename, kpse_cmap_format, 0); 
+#endif
+
+  /* Files found above are assumed to be CMap,
+   * if it's not really CMap it will cause an error.
+   */
+  for (i = 0; !fqpn && fools[i]; i++) { 
+    fqpn = dpx_foolsearch(fools[i], filename, 1);
+    if (fqpn) {
+#ifndef  MIKTEX_NO_KPATHSEA
+      insistupdate(filename, fqpn, fools[i],
+                   kpse_program_text_format, kpse_cmap_format); 
+#endif
+      if (!qcheck_filetype(fqpn, DPX_RES_TYPE_CMAP)) {
+        WARN("Found file \"%s\" for PostScript CMap but it doesn't look like a CMap...", fqpn);
+        RELEASE(fqpn);
+        fqpn = NULL;
+      }
+    }
+  }
+
+  return  fqpn;
+}
+
+
+/* Search order:
+ *   SFDFONTS (TDS 1.1)
+ *   ttf2pk   (text file)
+ *   ttf2tfm  (text file)
+ *   dvipdfm  (text file)   
+ */
+static char *
+dpx_find_sfd_file (const char *filename)
+{
+  char  *fqpn = NULL;
+  char  *q;
+  static const char *fools[] = {
+    "ttf2pk", "ttf2tfm", NULL
+  };
+  int    i;
+
+  q    = ensuresuffix(filename, ".sfd");
+#ifndef  MIKTEX_NO_KPATHSEA
+  fqpn = kpse_find_file(q, kpse_sfd_format, 0);
+#endif /* !MIKTEX */
+
+  for (i = 0; !fqpn && fools[i]; i++) { 
+    fqpn = dpx_foolsearch(fools[i], q, 1);
+#ifndef  MIKTEX_NO_KPATHSEA
+    if (fqpn)
+      insistupdate(filename, fqpn, fools[i],
+                   kpse_program_text_format, kpse_sfd_format); 
+#endif
+  }
+  RELEASE(q);
+
+  return  fqpn;
+}
+
+
+static char *
+dpx_find_enc_file (const char *filename)
+{
+  char  *fqpn = NULL;
+  char  *q;
+  static const char *fools[] = {
+    "dvips", NULL
+  };
+  int    i;
+
+  q = ensuresuffix(filename, ".enc");
+#ifdef  MIKTEX_NO_KPATHSEA
+  if (miktex_find_psheader_file(q, _tmpbuf)) {
+    fqpn = NEW(strlen(_tmpbuf) + 1, char);
+    strcpy(fqpn, _tmpbuf);
+  }
+#else
+  fqpn = kpse_find_file(q, kpse_enc_format, 0);
+#endif /* MIKTEX */
+
+  for (i = 0; !fqpn && fools[i]; i++) { 
+    fqpn = dpx_foolsearch(fools[i], q, 1);
+#ifndef  MIKTEX_NO_KPATHSEA
+    if (fqpn)
+      insistupdate(filename, fqpn, fools[i],
+                   kpse_program_text_format, kpse_enc_format); 
+#endif
+  }
+  RELEASE(q);
+
+  return  fqpn;
 }
 
 static int
@@ -348,21 +742,97 @@ is_absolute_path(const char *filename)
 #endif
   return 0;
 }
-#endif
 
-static int
-has_suffix(const char *str, const char *suffix)
+char *
+dpx_find_type1_file (const char *filename)
 {
-  if (!str || !suffix)
-      return 0;
-  size_t lenstr = strlen(str);
-  size_t lensuffix = strlen(suffix);
-  if (lensuffix >  lenstr)
-      return 0;
-  return strncasecmp(str + lenstr - lensuffix, suffix, lensuffix) == 0;
+  char  *fqpn = NULL;
+
+  if (is_absolute_path(filename))
+    fqpn = xstrdup(filename);
+  else
+    fqpn = kpse_find_file(filename, kpse_type1_format, 0);
+  if (fqpn && !qcheck_filetype(fqpn, DPX_RES_TYPE_T1FONT)) {
+    RELEASE(fqpn);
+    fqpn = NULL;
+  }
+
+  return  fqpn;
 }
 
-static const char *
+
+char *
+dpx_find_truetype_file (const char *filename)
+{
+  char  *fqpn = NULL;
+
+  if (is_absolute_path(filename))
+    fqpn = xstrdup(filename);
+  else
+    fqpn = kpse_find_file(filename, kpse_truetype_format, 0);
+  if (fqpn && !qcheck_filetype(fqpn, DPX_RES_TYPE_TTFONT)) {
+    RELEASE(fqpn);
+    fqpn = NULL;
+  }
+
+  return  fqpn;
+}
+
+
+char *
+dpx_find_opentype_file (const char *filename)
+{
+  char  *fqpn = NULL;
+  char  *q;
+
+  q = ensuresuffix(filename, ".otf");
+#ifndef MIKTEX_NO_KPATHSEA
+  if (is_absolute_path(q))
+    fqpn = xstrdup(q);
+  else
+    fqpn = kpse_find_file(q, kpse_opentype_format, 0);
+  if (!fqpn) {
+#endif
+    fqpn = dpx_foolsearch("dvipdfmx", q, 0);
+#ifndef  MIKTEX_NO_KPATHSEA
+    if (fqpn)
+      insistupdate(filename, fqpn, "dvipdfmx",
+                   kpse_program_binary_format, kpse_opentype_format); 
+  }
+#endif
+  RELEASE(q);
+
+  /* *We* use "opentype" for ".otf" (CFF). */
+  if (fqpn && !qcheck_filetype(fqpn, DPX_RES_TYPE_OTFONT)) {
+    RELEASE(fqpn);
+    fqpn = NULL;
+  }
+
+  return  fqpn;
+}
+
+
+char *
+dpx_find_dfont_file (const char *filename)
+{
+  char *fqpn = NULL;
+
+  fqpn = kpse_find_file(filename, kpse_truetype_format, 0);
+  if (fqpn) {
+    int len = strlen(fqpn);
+    if (len > 6 && strncmp(fqpn+len-6, ".dfont", 6)) {
+      fqpn = RENEW(fqpn, len+6, char);
+      strcat(fqpn, "/rsrc");
+    }
+  }
+  if (!qcheck_filetype(fqpn, DPX_RES_TYPE_DFONT)) {
+    RELEASE(fqpn);
+    fqpn = NULL;
+  }
+  return fqpn;
+}
+ 
+static char *
 dpx_get_tmpdir (void)
 {
 #ifdef WIN32
@@ -370,6 +840,8 @@ dpx_get_tmpdir (void)
 #else /* WIN32 */
 #  define __TMPDIR     "/tmp"
 #endif /* WIN32 */
+    size_t i;
+    char *ret;
     const char *_tmpd;
 
 #ifdef  HAVE_GETENV
@@ -385,7 +857,13 @@ dpx_get_tmpdir (void)
 #else /* HAVE_GETENV */
     _tmpd = __TMPDIR;
 #endif /* HAVE_GETENV */
-    return _tmpd;
+    ret = xstrdup(_tmpd);
+    i = strlen(ret);
+    while(i > 1 && IS_DIR_SEP(ret[i-1])) {
+      ret[i-1] = '\0';
+      i--;
+    }
+    return ret;
 }
 
 #ifdef  HAVE_MKSTEMP
@@ -399,41 +877,62 @@ dpx_create_temp_file (void)
 
 #if defined(MIKTEX)
   {
-    tmp = NEW(_MAX_PATH + 1, char);
+    tmp = NEW(PATH_MAX + 1, char);
     miktex_create_temp_file_name(tmp); /* FIXME_FIXME */
+#if defined(MIKTEX_WINDOWS)
+    {
+      char * lpsz;
+      for (lpsz = tmp; *lpsz != 0; ++ lpsz)
+      {
+	if (*lpsz == '\\')
+	{
+	  *lpsz = '/';
+	}
+      }
+    }
+#endif
   }
 #elif defined(HAVE_MKSTEMP)
 #  define TEMPLATE     "/dvipdfmx.XXXXXX"
   {
-    const char *_tmpd;
-    int   _fd = -1;
+    char *_tmpd;
+    int  _fd = -1;
     _tmpd = dpx_get_tmpdir();
     tmp = NEW(strlen(_tmpd) + strlen(TEMPLATE) + 1, char);
     strcpy(tmp, _tmpd);
+    RELEASE(_tmpd);
     strcat(tmp, TEMPLATE);
     _fd  = mkstemp(tmp);
-    if (_fd != -1)
+    if (_fd != -1) {
 #  ifdef WIN32
+      char *p;
+      for (p = tmp; *p; p++) {
+        if (IS_KANJI (p))
+          p++;
+        else if (*p == '\\')
+          *p = '/';
+      }
       _close(_fd);
 #  else
       close(_fd);
 #  endif /* WIN32 */
-    else {
+    } else {
       RELEASE(tmp);
       tmp = NULL;
     }
   }
 #else /* use _tempnam or tmpnam */
   {
-#  if defined(WIN32) && !defined(__MINGW32__)
-    const char *_tmpd;
+#  ifdef WIN32
+    char *_tmpd;
     char *p;
     _tmpd = dpx_get_tmpdir();
     tmp = _tempnam (_tmpd, "dvipdfmx.");
+    RELEASE(_tmpd);
     for (p = tmp; *p; p++) {
-      /*if (IS_KANJI (p))
+      if (IS_KANJI(p))
         p++;
-      else*/ if (*p == '\\')
+      else if (*p == '\\')
         *p = '/';
     }
 #  else /* WIN32 */
@@ -452,7 +951,7 @@ char *
 dpx_create_fix_temp_file (const char *filename)
 {
 #define PREFIX "dvipdfm-x."
-  static const char *dir = NULL;
+  static char *dir = NULL;
   static char *cwd = NULL;
   char *ret, *s;
   int i;
@@ -463,16 +962,14 @@ dpx_create_fix_temp_file (const char *filename)
 #endif
 
   if (!dir) {
-      char wd[PATH_MAX];
       dir = dpx_get_tmpdir();
-      getcwd(wd, PATH_MAX);
-      cwd = strdup(wd);
+      cwd = xgetcwd();
   }
 
-  texpdf_MD5_init(&state);
-  texpdf_MD5_write(&state, (unsigned char *)cwd,      strlen(cwd));
-  texpdf_MD5_write(&state, (unsigned const char *)filename, strlen(filename));
-  texpdf_MD5_final(digest, &state);
+  MD5_init(&state);
+  MD5_write(&state, (unsigned char *)cwd,      strlen(cwd));
+  MD5_write(&state, (unsigned const char *)filename, strlen(filename));
+  MD5_final(digest, &state);
 
   ret = NEW(strlen(dir)+1+strlen(PREFIX)+MAX_KEY_LEN*2 + 1, char);
   sprintf(ret, "%s/%s", dir, PREFIX);
@@ -481,12 +978,17 @@ dpx_create_fix_temp_file (const char *filename)
       sprintf(s, "%02x", digest[i]);
       s += 2;
   }
-#if defined(WIN32) && !defined(__MINGW32__)
+#ifdef WIN32
   for (p = ret; *p; p++) {
-    /*if (IS_KANJI (p))
-      p++;
-    else*/ if (*p == '\\')
+#if defined(MIKTEX)
+    if (*p == '\\')
       *p = '/';
+#else
+    if (IS_KANJI (p))
+      p++;
+    else if (*p == '\\')
+      *p = '/';
+#endif
   }
 #endif
   /* printf("dpx_create_fix_temp_file: %s\n", ret); */
@@ -504,35 +1006,17 @@ dpx_clear_cache_filter (const struct dirent *ent) {
 #endif
 }
 
-/* WARNING: If you're used to dpx_open_file in dvipdfkmx, this has
-quite a different meaning within libtexpdf. Here the job is ensuring
-that the filename is a fully-qualified name of the type that we are
-expecting. */
-FILE *
-dpx_open_file (const char *filename, dpx_res_type type)
-{
-  FILE  *fp   = NULL;
-
-  if (type == DPX_RES_TYPE_DFONT && !has_suffix(filename, ".dfont"))
-    return fp;
-
-  if (qcheck_filetype(filename, type)) {
-    fp = MFOPEN(filename, FOPEN_RBIN_MODE);
-  }
-  return  fp;
-}
-
 void
 dpx_delete_old_cache (int life)
 {
-  const char *dir;
+  char *dir;
   char *pathname;
   DIR *dp;
   struct dirent *de;
   time_t limit;
 
   if (life == -2) {
-      keep_cache = -1;
+      dpx_conf.file.keep_cache = -1;
       return;
   }
 
@@ -540,12 +1024,15 @@ dpx_delete_old_cache (int life)
   pathname = NEW(strlen(dir)+1+strlen(PREFIX)+MAX_KEY_LEN*2 + 1, char);
   limit = time(NULL) - life * 60 * 60;
 
-  if (life >= 0) keep_cache = 1;
+  if (life >= 0) dpx_conf.file.keep_cache = 1;
   if ((dp = opendir(dir)) != NULL) {
       while((de = readdir(dp)) != NULL) {
           if (dpx_clear_cache_filter(de)) {
               struct stat sb;
               sprintf(pathname, "%s/%s", dir, de->d_name);
+/* Here pathname is always ASCII only. So fsyscp_stat() is
+ * not necessary for Windows.
+ */
               stat(pathname, &sb);
               if (sb.st_mtime < limit) {
                   remove(pathname);
@@ -555,6 +1042,7 @@ dpx_delete_old_cache (int life)
       }
       closedir(dp);
   }
+  RELEASE(dir);
   RELEASE(pathname);
 }
 
@@ -563,7 +1051,7 @@ dpx_delete_temp_file (char *tmp, int force)
 {
   if (!tmp)
     return;
-  if (force || keep_cache != 1) remove (tmp);
+  if (force || dpx_conf.file.keep_cache != 1) remove (tmp);
   RELEASE(tmp);
 
   return;
@@ -578,8 +1066,7 @@ dpx_delete_temp_file (char *tmp, int force)
  */
 int
 dpx_file_apply_filter (const char *cmdtmpl,
-                      const char *input, const char *output,
-                      unsigned char version)
+                      const char *input, const char *output, int version)
 {
   char   *cmd = NULL;
   const char   *p, *q;
@@ -622,8 +1109,8 @@ if ((l) + (n) >= (m)) { \
         }
         break;
       case  'v': /* Version number, e.g. 1.4 */ {
-       char buf[6];
-       sprintf(buf, "1.%hu", (unsigned short) version);
+       char buf[256];
+       sprintf(buf, "%d.%d", version/10, version%10);
        need(cmd, n, size, strlen(buf));
        strcpy(cmd + n, buf);  n += strlen(buf);
        break;
@@ -753,7 +1240,7 @@ static int
 isdfont (FILE *fp)
 {
   int i, n;
-  unsigned long pos;
+  uint32_t pos;
 
   rewind(fp);
 
@@ -780,8 +1267,13 @@ qcheck_filetype (const char *fqpn, dpx_res_type type)
   if (!fqpn)
     return  0;
 
+#if defined(_WIN32)
+  if (fsyscp_stat(fqpn, &sb) != 0 && stat(fqpn, &sb) != 0)
+    return 0;
+#else
   if (stat(fqpn, &sb) != 0)
     return 0;
+#endif /* _WIN32 */
 
   if (sb.st_size == 0)
     return 0;
@@ -815,3 +1307,20 @@ qcheck_filetype (const char *fqpn, dpx_res_type type)
   return  r;
 }
 
+#if defined(WIN32)
+FILE *generic_fsyscp_fopen (const char *filename, const char *mode)
+{
+  FILE *f;
+
+  f = fsyscp_fopen (filename, mode);
+
+  if (f == NULL && file_system_codepage != win32_codepage) {
+    int tmpcp = file_system_codepage;
+    file_system_codepage = win32_codepage;
+    f = fsyscp_fopen (filename, mode);
+    file_system_codepage = tmpcp;
+  }
+
+  return f;
+}
+#endif /* WIN32 */
