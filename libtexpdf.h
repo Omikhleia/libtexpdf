@@ -76,7 +76,6 @@ extern int compat_mode;
 #include "mem.h"
 #include "mfileio.h"
 #include "numbers.h"
-#include "otl_conf.h"
 #include "otl_opt.h"
 #include "pdfcolor.h"
 #include "pdfdev.h"

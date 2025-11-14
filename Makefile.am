@@ -63,8 +63,6 @@ libtexpdf_la_SOURCES = \
 	mt19937ar.c \
 	numbers.c \
 	numbers.h \
-	otl_conf.c \
-	otl_conf.h \
 	otl_opt.c \
 	otl_opt.h \
 	pdfcolor.c \
