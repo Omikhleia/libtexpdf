@@ -160,7 +160,6 @@ pkginclude_HEADERS = \
 	mem.h \
 	mfileio.h \
 	numbers.h \
-	otl_conf.h \
 	otl_opt.h \
 	pdfcolor.h \
 	pdfdev.h \
