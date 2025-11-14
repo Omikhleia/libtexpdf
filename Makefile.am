@@ -60,6 +60,7 @@ libtexpdf_la_SOURCES = \
 	mem.h \
 	mfileio.c \
 	mfileio.h \
+	mt19937ar.c \
 	numbers.c \
 	numbers.h \
 	otl_conf.c \
