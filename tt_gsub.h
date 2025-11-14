@@ -1,8 +1,10 @@
 /* This is dvipdfmx, an eXtended version of dvipdfm by Mark A. Wicks.
 
-    Copyright (C) 2002-2014 by Jin-Hwan Cho and Shunsaku Hirata,
+    Copyright (C) 2002-2020 by Jin-Hwan Cho and Shunsaku Hirata,
     the dvipdfmx project team.
     
+    Copyright (C) 2014-2025 by The SILE Typesetter (as libtexpdf).
+
     This program is free software; you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
     the Free Software Foundation; either version 2 of the License, or
@@ -23,8 +25,7 @@
 
 #include "sfnt.h"
 #include "otl_opt.h"
-
-extern void otl_gsub_set_verbose (void);
+#include "cmap.h"
 
 typedef struct otl_gsub otl_gsub;
 
@@ -55,11 +56,13 @@ extern int  otl_gsub_apply_lig (otl_gsub *gsub_list,
                                 USHORT *gid_in, USHORT num_gids,
                                 USHORT *gid_out);
 
-#if  0  
-extern int  otl_gsub_dump      (otl_gsub *gsub_list,
-                                const char *script,
-                                const char *language,
-                                const char *feature);
-#endif
+/* Handle a list of OTL features */
+extern int  otl_gsub_add_feat_list (otl_gsub *gsub_list,
+                                    const char *otl_tags, sfnt *sfont);
+extern int  otl_gsub_set_chain   (otl_gsub *gsub_list, const char *otl_tags);
+extern int  otl_gsub_apply_chain (otl_gsub *gsub_list, USHORT *gid);
 
+extern int  otl_gsub_add_ToUnicode (CMap *cmap, char *used_chars,
+                                    int32_t *map_base, int32_t *map_sub, USHORT num_glyphs,
+                                    uint16_t *GIDToCIDMap, sfnt *sfont);
 #endif /* _TT_GSUB_H_ */

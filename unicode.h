@@ -1,9 +1,11 @@
 /* This is dvipdfmx, an eXtended version of dvipdfm by Mark A. Wicks.
 
-    Copyright (C) 2002-2014 by Jin-Hwan Cho and Shunsaku Hirata,
+    Copyright (C) 2002-2020 by Jin-Hwan Cho and Shunsaku Hirata,
     the dvipdfmx project team.
 
     Copyright (C) 1998, 1999 by Mark A. Wicks <mwicks@kettering.edu>
+
+    Copyright (C) 2014-2025 by The SILE Typesetter (as libtexpdf).
 
     This program is free software; you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -23,9 +25,15 @@
 #ifndef _UNICODE_H_
 #define _UNICODE_H_
 
-extern void UC_set_verbose (void);
+extern int UC_is_valid      (int32_t ucv);
+extern int     UC_UTF16BE_is_valid_string (const unsigned char *p, const unsigned char *endptr);
+extern int     UC_UTF8_is_valid_string (const unsigned char *p, const unsigned char *endptr);
 
-extern int UC_sput_UTF16BE  (long ucv, unsigned char **dstpp, unsigned char *endptr);
-extern int UC_is_valid      (long ucv);
+extern size_t  UC_UTF16BE_encode_char (int32_t ucv, unsigned char **dstpp, unsigned char *endptr);
+extern int32_t UC_UTF16BE_decode_char (const unsigned char **pp, const unsigned char *endptr);
+extern int32_t UC_UTF8_decode_char (const unsigned char **pp, const unsigned char *endptr);
+extern size_t  UC_UTF8_encode_char (int32_t ucv, unsigned char **dstpp, unsigned char *endptr);
+
+extern int32_t UC_Combine_CJK_compatibility_ideograph(int32_t ucv, int32_t uvs);
 
 #endif /* _UNICODE_H_ */

@@ -1,9 +1,11 @@
 /* This is dvipdfmx, an eXtended version of dvipdfm by Mark A. Wicks.
 
-    Copyright (C) 2007-2014 by Jin-Hwan Cho and Shunsaku Hirata,
+    Copyright (C) 2002-2020 by Jin-Hwan Cho and Shunsaku Hirata,
     the dvipdfmx project team.
 
     Copyright (C) 1998, 1999 by Mark A. Wicks <mwicks@kettering.edu>
+
+    Copyright (C) 2014-2025 by The SILE Typesetter (as libtexpdf).
 
     This program is free software; you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -27,35 +29,27 @@
  *  http://partners.adobe.com/asn/tech/type/unicodegn.jsp
  */
 
-#ifdef HAVE_CONFIG_H
-#include <config.h>
-#endif
+#include "libtexpdf.h"
 
 #include <string.h>
 #include <ctype.h>
 
+#include "system.h"
 #include "mem.h"
 #include "error.h"
 
 #include "mfileio.h"
 #include "pdfparse.h"
-
+#include "dpxconf.h"
 /* Hash */
 #include "dpxutil.h"
-
 #include "dpxfile.h"
 
 #include "unicode.h"
 
 #include "agl.h"
 
-static int verbose = 0;
-
-void
-agl_set_verbose (void)
-{
-  verbose++;
-}
+static int agl_load_listfile (const char *filename, int format);
 
 static agl_name *
 agl_new_name (void)
@@ -142,9 +136,9 @@ static const char * const modifiers[] = {
 static int
 skip_capital (const char **p, const char *endptr)
 {
-  long slen = 0, len;
+  int slen = 0, len;
 
-  len = (long) (endptr - (*p));
+  len = (int) (endptr - (*p));
 
   if (len >= 2 &&
       ((**p == 'A' && *(*p+1) == 'E') ||
@@ -177,10 +171,10 @@ skip_capital (const char **p, const char *endptr)
 static int
 skip_modifier (const char **p, const char *endptr)
 {
-  long slen = 0, len;
+  int  slen = 0, len;
   int  i;
 
-  len = (long) (endptr - (*p));
+  len = (int) (endptr - (*p));
 
   for (i = 0; modifiers[i] != NULL; i++) {
     if ((len >= strlen(modifiers[i]) &&
@@ -197,7 +191,7 @@ skip_modifier (const char **p, const char *endptr)
 static int
 is_smallcap (const char *glyphname)
 {
-  long  len, slen;
+  int  len, slen;
   const char *p, *endptr;
 
   if (!glyphname)
@@ -361,7 +355,7 @@ agl_normalized_name (char *glyphname)
 
 static struct ht_table aglmap;
 
-static void CDECL
+static inline void
 hval_free (void *hval)
 {
   agl_release_name((struct agl_name *) hval);
@@ -388,7 +382,7 @@ agl_close_map (void)
 
 #define WBUF_SIZE 1024
 
-int
+static int
 agl_load_listfile (const char *filename, int is_predef)
 {
   int   count = 0;
@@ -405,14 +399,14 @@ agl_load_listfile (const char *filename, int is_predef)
     return -1;
   }
 
-  if (verbose)
+  if (dpx_conf.verbose_level > 0)
     MESG("<AGL:%s", filename);
 
   while ((p = mfgets(wbuf, WBUF_SIZE, fp)) != NULL) {
     agl_name *agln, *duplicate;
     char     *name;
     int       n_unicodes, i;
-    long      unicodes[AGL_MAX_UNICODES];
+    int32_t   unicodes[AGL_MAX_UNICODES];
 
     endptr = p + strlen(p);
     texpdf_skip_white(&p, endptr);
@@ -475,7 +469,7 @@ agl_load_listfile (const char *filename, int is_predef)
       duplicate->alternate = agln;
     }
 
-    if (verbose > 3) {
+    if (dpx_conf.verbose_level > 5) {
       if (agln->suffix)
         MESG("agl: %s [%s.%s] -->", name, agln->name, agln->suffix);
       else
@@ -495,7 +489,7 @@ agl_load_listfile (const char *filename, int is_predef)
   }
   DPXFCLOSE(fp);
 
-  if (verbose)
+  if (dpx_conf.verbose_level > 0)
     MESG(">");
 
   return count;
@@ -552,10 +546,10 @@ agl_name_is_unicode (const char *glyphname)
   return 0;
 }
 
-long
+int32_t
 agl_name_convert_unicode (const char *glyphname)
 {
-  long  ucv = -1;
+  int32_t ucv = -1;
   const char *p;
 
   if (!agl_name_is_unicode(glyphname))
@@ -595,10 +589,10 @@ agl_name_convert_unicode (const char *glyphname)
 
 
 
-static long
+static int
 xtol (const char *start, int len)
 {
-  long v = 0;
+  int v = 0;
 
   while (len-- > 0) {
     v <<= 4;
@@ -620,12 +614,12 @@ xtol (const char *start, int len)
   ((u) >= 0x100000L && (u) <= 0x10FFFDL) \
 )
 
-static long
+static int32_t
 put_unicode_glyph (const char *name,
 		   unsigned char **dstpp, unsigned char *limptr)
 {
   const char *p;
-  long  len = 0, ucv;
+  int32_t len = 0, ucv;
 
   p   = name;
   ucv = 0;
@@ -633,12 +627,12 @@ put_unicode_glyph (const char *name,
   if (p[1] != 'n') {
     p   += 1;
     ucv  = xtol(p, strlen(p));
-    len += UC_sput_UTF16BE (ucv, dstpp, limptr);
+    len += UC_UTF16BE_encode_char(ucv, dstpp, limptr);
   } else {
     p += 3;
     while (*p != '\0') {
       ucv  = xtol(p, 4);
-      len += UC_sput_UTF16BE (ucv, dstpp, limptr);
+      len += UC_UTF16BE_encode_char(ucv, dstpp, limptr);
       p   += 4;
     }
   }
@@ -646,12 +640,12 @@ put_unicode_glyph (const char *name,
   return len;
 }
 
-long
+int32_t
 agl_sput_UTF16BE (const char *glyphstr,
 		  unsigned char **dstpp, unsigned char *limptr,
 		  int *fail_count)
 {
-  long  len   = 0;
+  int32_t len   = 0;
   int   count = 0;
   const char *p, *endptr;
 
@@ -665,7 +659,7 @@ agl_sput_UTF16BE (const char *glyphstr,
   while (p < endptr) {
     char     *name;
     const char *delim;
-    long      sub_len;
+    int32_t   sub_len;
     int       i;
     agl_name *agln0, *agln1 = NULL;
 
@@ -683,7 +677,7 @@ agl_sput_UTF16BE (const char *glyphstr,
     } else if (!delim || delim > endptr) {
       delim = endptr;
     }
-    sub_len = (long) (delim - p);
+    sub_len = (int32_t) (delim - p);
 
     name = NEW(sub_len+1, char);
     memcpy(name, p, sub_len);
@@ -702,7 +696,7 @@ agl_sput_UTF16BE (const char *glyphstr,
 		     IS_PUA(agln1->unicodes[0]))) {
 	agln0 = agl_normalized_name(name);
 	if (agln0) {
-	  if (verbose > 1 && agln0->suffix) {
+	  if (dpx_conf.verbose_level > 1 && agln0->suffix) {
 	    WARN("agl: fix %s --> %s.%s",
 		 name, agln0->name, agln0->suffix);
 	  }
@@ -712,10 +706,10 @@ agl_sput_UTF16BE (const char *glyphstr,
       }
       if (agln1) {
 	for (i = 0; i < agln1->n_components; i++) {
-	  len += UC_sput_UTF16BE (agln1->unicodes[i], dstpp, limptr);
+	  len += UC_UTF16BE_encode_char(agln1->unicodes[i], dstpp, limptr);
 	}
       } else {
-	if (verbose) {
+	if (dpx_conf.verbose_level > 0) {
 	  WARN("No Unicode mapping for glyph name \"%s\" found.", name);
 	}
 	count++;
@@ -732,7 +726,7 @@ agl_sput_UTF16BE (const char *glyphstr,
 
 int
 agl_get_unicodes (const char *glyphstr,
-		  long *unicodes, int max_unicodes)
+		  int32_t *unicodes, int max_unicodes)
 {
   int   count = 0;
   const char *p, *endptr;
@@ -745,7 +739,7 @@ agl_get_unicodes (const char *glyphstr,
   while (p < endptr) {
     char     *name;
     const char *delim;
-    long      sub_len;
+    int32_t   sub_len;
     int       i;
     agl_name *agln0, *agln1 = NULL;
 
@@ -760,7 +754,7 @@ agl_get_unicodes (const char *glyphstr,
     } else if (!delim || delim > endptr) {
       delim = endptr;
     }
-    sub_len = (long) (delim - p);
+    sub_len = (int32_t) (delim - p);
 
     name = NEW(sub_len+1, char);
     memcpy(name, p, sub_len);
@@ -792,7 +786,7 @@ agl_get_unicodes (const char *glyphstr,
 		     IS_PUA(agln1->unicodes[0]))) {
 	agln0 = agl_normalized_name(name);
 	if (agln0) {
-	  if (verbose > 1 && agln0->suffix) {
+	  if (dpx_conf.verbose_level > 1 && agln0->suffix) {
 	    WARN("agl: fix %s --> %s.%s",
 		 name, agln0->name, agln0->suffix);
 	  }
@@ -809,7 +803,7 @@ agl_get_unicodes (const char *glyphstr,
 	  unicodes[count++] = agln1->unicodes[i];
 	}
       } else {
-	if (verbose > 1)
+	if (dpx_conf.verbose_level > 1)
 	  WARN("No Unicode mapping for glyph name \"%s\" found.", name);
 	RELEASE(name);
 	return -1;

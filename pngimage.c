@@ -1,9 +1,11 @@
 /* This is dvipdfmx, an eXtended version of dvipdfm by Mark A. Wicks.
 
-    Copyright (C) 2002-2014 by Jin-Hwan Cho and Shunsaku Hirata,
+    Copyright (C) 2002-2020 by Jin-Hwan Cho and Shunsaku Hirata,
     the dvipdfmx project team.
 
     Copyright (C) 1998, 1999 by Mark A. Wicks <mwicks@kettering.edu>
+
+    Copyright (C) 2014-2025 by The SILE Typesetter (as libtexpdf).
 
     This program is free software; you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -19,34 +21,35 @@
     along with this program; if not, write to the Free Software
     Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA.
 */
-#define XETEX 1 /* We are all xetex now */
 
-#ifdef BUILDING_LIBTEXPDF
-#include <config.h>
-#endif
+
+#include "libtexpdf.h"
 
 /*
  * PNG SUPPORT
  *
- *  All bitdepth less than 16 is supported.
+ *  All bitdepth supported.
  *  Supported color types are: PALETTE, RGB, GRAY, RGB_ALPHA, GRAY_ALPHA.
  *  Supported ancillary chunks: tRNS, cHRM, gAMA, (sRGB), (iCCP)
  *
  *  cHRM support is not tested well. CalRGB/CalGray colorspace is used for
  *  PNG images that have cHRM chunk.
  *
- * LIMITATIONS
- *
- *   Recent version of PDF (>= 1.5) support 16 bpc, but 16 bit bitdepth PNG
- *   images are automatically converted to 8 bit bitpedth image.
- *
- * TODO
- *  16 bpc support for PDF-1.5. JBIG compression for monochrome image.
- *  Predictor for deflate ?
  */
+
+#include "system.h"
+#include "error.h"
+#include "mem.h"
+
+#include "dpxconf.h"
+
+#include "pdfcolor.h"
+#include "pdfobj.h"
 
 #define PNG_DEBUG_STR "PNG"
 #define PNG_DEBUG     3
+
+#ifdef HAVE_LIBPNG
 
 /*
  * Write, MNG, Progressive not required.
@@ -54,17 +57,13 @@
 #define PNG_NO_WRITE_SUPPORTED
 #define PNG_NO_MNG_FEATURES
 #define PNG_NO_PROGRESSIVE_READ
-#if 0
-/* 16_TO_8 required. */
-#define PNG_NO_READ_TRANSFORMS
-#endif
 
 #include <png.h>
 #include "pngimage.h"
 
-#include "libtexpdf.h"
-
 #include "pdfximage.h"
+
+#define DPX_PNG_DEFAULT_GAMMA 2.2
 
 #define PDF_TRANS_TYPE_NONE   0
 #define PDF_TRANS_TYPE_BINARY 1
@@ -125,7 +124,7 @@ static void read_image_data (png_structp png_ptr,
                              png_uint_32 height, png_uint_32 rowbytes);
 
 int
-texpdf_check_for_png (FILE *png_file) 
+texpdf_check_for_png (FILE *png_file)
 {
   unsigned char sigbytes[4];
 
@@ -189,10 +188,13 @@ png_include_image (pdf_ximage *ximage, FILE *png_file)
   height     = png_get_image_height(png_ptr, png_info_ptr);
   bpc        = png_get_bit_depth   (png_ptr, png_info_ptr);
 
-  /* We do not need 16-bpc color. Ask libpng to convert down to 8-bpc. */
+  /* Ask libpng to convert down to 8-bpc. */
   if (bpc > 8) {
+    if (texpdf_check_version(1, 5) < 0) {
+      WARN("%s: 16-bpc PNG requires PDF version 1.5.", PNG_DEBUG_STR);
     png_set_strip_16(png_ptr);
     bpc = 8;
+  }
   }
   /* Ask libpng to gamma-correct.
    * It is wrong to assume screen gamma value 2.2 but...
@@ -201,7 +203,6 @@ png_include_image (pdf_ximage *ximage, FILE *png_file)
   if (!png_get_valid(png_ptr, png_info_ptr, PNG_INFO_iCCP) &&
       !png_get_valid(png_ptr, png_info_ptr, PNG_INFO_sRGB) &&
       !png_get_valid(png_ptr, png_info_ptr, PNG_INFO_cHRM) &&
-      !png_get_valid(png_ptr, png_info_ptr, PNG_INFO_sRGB) &&
        png_get_valid(png_ptr, png_info_ptr, PNG_INFO_gAMA)) {
     double G = 1.0;
     png_get_gAMA (png_ptr, png_info_ptr, &G);
@@ -218,7 +219,7 @@ png_include_image (pdf_ximage *ximage, FILE *png_file)
   info.height = height;
   info.bits_per_component = bpc;
 
-  if (compat_mode)
+  if (dpx_conf.compat_mode == dpx_mode_compat_mode)
     info.xdensity = info.ydensity = 72.0 / 100.0;
   else
   {
@@ -262,6 +263,8 @@ png_include_image (pdf_ximage *ximage, FILE *png_file)
        */
       break;
     }
+    info.num_components = 1;
+
     break;
   case PNG_COLOR_TYPE_RGB:
   case PNG_COLOR_TYPE_RGB_ALPHA:
@@ -330,6 +333,10 @@ png_include_image (pdf_ximage *ximage, FILE *png_file)
     if (trans_type == PDF_TRANS_TYPE_BINARY)
       texpdf_add_dict(stream_dict, texpdf_new_name("Mask"), mask);
     else if (trans_type == PDF_TRANS_TYPE_ALPHA) {
+      if (info.bits_per_component >= 8 && info.width > 64) {
+        pdf_stream_set_predictor(mask, 2, info.width,
+                                 info.bits_per_component, 1);
+      }
       texpdf_add_dict(stream_dict, texpdf_new_name("SMask"), texpdf_ref_obj(mask));
       texpdf_release_obj(mask);
     } else {
@@ -347,7 +354,7 @@ png_include_image (pdf_ximage *ximage, FILE *png_file)
    * flag of iTxt chunks.
    */
 #if PNG_LIBPNG_VER >= 10614
-  if (texpdf_get_version() >= 4) {
+  if (texpdf_check_version(1, 4) >= 0) {
     png_textp text_ptr;
     pdf_obj  *XMP_stream, *XMP_stream_dict;
     int       i, num_text;
@@ -393,7 +400,12 @@ png_include_image (pdf_ximage *ximage, FILE *png_file)
     png_destroy_info_struct(png_ptr, &png_info_ptr);
   if (png_ptr)
     png_destroy_read_struct(&png_ptr, NULL, NULL);
-
+  if (color_type != PNG_COLOR_TYPE_PALETTE &&
+      info.bits_per_component >= 8 &&
+      info.height > 64) {
+    pdf_stream_set_predictor(stream, 15, info.width,
+                             info.bits_per_component, info.num_components);
+  }
   texpdf_ximage_set_image(ximage, &info, stream);
 
   return 0;
@@ -426,13 +438,11 @@ static int
 check_transparency (png_structp png_ptr, png_infop info_ptr)
 {
   int           trans_type;
-  unsigned      pdf_version;
   png_byte      color_type;
   png_color_16p trans_values;
   png_bytep     trans;
   int           num_trans;
 
-  pdf_version = texpdf_get_version();
   color_type  = png_get_color_type(png_ptr, info_ptr);
 
   /*
@@ -474,8 +484,8 @@ check_transparency (png_structp png_ptr, png_infop info_ptr)
    * We can convert alpha cahnnels to explicit mask via user supplied alpha-
    * threshold value. But I will not do that.
    */
-  if (( pdf_version < 3 && trans_type != PDF_TRANS_TYPE_NONE   ) ||
-      ( pdf_version < 4 && trans_type == PDF_TRANS_TYPE_ALPHA )) {
+  if (( texpdf_check_version(1, 3) < 0 && trans_type != PDF_TRANS_TYPE_NONE   ) ||
+      ( texpdf_check_version(1, 4) < 0 && trans_type == PDF_TRANS_TYPE_ALPHA )) {
     /*
      *   No transparency supported but PNG uses transparency, or Soft-Mask
      * required but no support for it is available in this version of PDF.
@@ -492,9 +502,9 @@ check_transparency (png_structp png_ptr, png_infop info_ptr)
     bg.red = 255; bg.green = 255; bg.blue  = 255; bg.gray = 255; bg.index = 0;
     png_set_background(png_ptr, &bg, PNG_BACKGROUND_GAMMA_SCREEN, 0, 1.0);
     WARN("%s: Transparency will be ignored. (no support in PDF ver. < 1.3)", PNG_DEBUG_STR);
-    if (pdf_version < 3)
+    if (texpdf_check_version(1, 3) < 0)
       WARN("%s: Please use -V 3 option to enable binary transparency support.", PNG_DEBUG_STR);
-    if (pdf_version < 4)
+    if (texpdf_check_version(1, 4) < 0)
       WARN("%s: Please use -V 4 option to enable full alpha channel support.", PNG_DEBUG_STR);
     trans_type = PDF_TRANS_TYPE_NONE;
   }
@@ -669,7 +679,7 @@ create_cspace_CalRGB (png_structp png_ptr, png_infop info_ptr)
     }
     G = 1.0 / G; /* Gamma is inverted. */
   } else {
-    G = 1.0;
+    G = DPX_PNG_DEFAULT_GAMMA;
   }
 
   cal_param = make_param_Cal(PNG_COLOR_TYPE_RGB, G, xw, yw, xr, yr, xg, yg, xb, yb);
@@ -710,7 +720,7 @@ create_cspace_CalGray (png_structp png_ptr, png_infop info_ptr)
     }
     G = 1.0 / G; /* Gamma is inverted. */
   } else {
-    G = 1.0;
+    G = DPX_PNG_DEFAULT_GAMMA;
   }
 
   cal_param = make_param_Cal(PNG_COLOR_TYPE_GRAY, G, xw, yw, xr, yr, xg, yg, xb, yb);
@@ -954,12 +964,16 @@ create_soft_mask (png_structp png_ptr, png_infop info_ptr,
   png_bytep   trans;
   int         num_trans;
   png_uint_32 i;
+  png_byte    bpc, mask, shift;
 
   if (!png_get_valid(png_ptr, info_ptr, PNG_INFO_tRNS) ||
       !png_get_tRNS(png_ptr, info_ptr, &trans, &num_trans, NULL)) {
     WARN("%s: PNG does not have valid tRNS chunk but tRNS is requested.", PNG_DEBUG_STR);
     return NULL;
   }
+  bpc   = png_get_bit_depth(png_ptr, info_ptr);
+  mask  = 0xff >> (8 - bpc);
+  shift = 8 - bpc;
 
   smask = texpdf_new_stream(STREAM_COMPRESS);
   dict  = texpdf_stream_dict(smask);
@@ -971,7 +985,8 @@ create_soft_mask (png_structp png_ptr, png_infop info_ptr,
   texpdf_add_dict(dict, texpdf_new_name("ColorSpace"), texpdf_new_name("DeviceGray"));
   texpdf_add_dict(dict, texpdf_new_name("BitsPerComponent"), texpdf_new_number(8));
   for (i = 0; i < width*height; i++) {
-    png_byte idx = image_data_ptr[i];
+    /* data is packed for 1/2/4 bpc formats, msb first */
+    png_byte idx = (image_data_ptr[bpc * i / 8] >> (shift - bpc * i % 8)) & mask;
     smask_data_ptr[i] = (idx < num_trans) ? trans[idx] : 0xff;
   }
   texpdf_add_stream(smask, (char *)smask_data_ptr, width*height);
@@ -988,19 +1003,21 @@ strip_soft_mask (png_structp png_ptr, png_infop info_ptr,
 		 png_uint_32 width, png_uint_32 height)
 {
   pdf_obj    *smask, *dict;
-  png_byte    color_type;
+  png_byte    color_type, bpc;
   png_bytep   smask_data_ptr;
   png_uint_32 i;
 
   color_type = png_get_color_type(png_ptr, info_ptr);
-
+  bpc        = png_get_bit_depth (png_ptr, info_ptr);
   if (color_type & PNG_COLOR_MASK_COLOR) {
-    if (*rowbytes_ptr != 4*width*sizeof(png_byte)) { /* Something wrong */
+    int bps = (bpc == 8) ? 4 : 8;
+    if (*rowbytes_ptr != bps*width*sizeof(png_byte)) { /* Something wrong */
       WARN("%s: Inconsistent rowbytes value.", PNG_DEBUG_STR);
       return NULL;
     }
   } else {
-    if (*rowbytes_ptr != 2*width*sizeof(png_byte)) { /* Something wrong */
+    int bps = (bpc == 8) ? 2 : 4;
+    if (*rowbytes_ptr != bps*width*sizeof(png_byte)) { /* Something wrong */
       WARN("%s: Inconsistent rowbytes value.", PNG_DEBUG_STR);
       return NULL;
     }
@@ -1013,24 +1030,43 @@ strip_soft_mask (png_structp png_ptr, png_infop info_ptr,
   texpdf_add_dict(dict, texpdf_new_name("Width"),      texpdf_new_number(width));
   texpdf_add_dict(dict, texpdf_new_name("Height"),     texpdf_new_number(height));
   texpdf_add_dict(dict, texpdf_new_name("ColorSpace"), texpdf_new_name("DeviceGray"));
-  texpdf_add_dict(dict, texpdf_new_name("BitsPerComponent"), texpdf_new_number(8));
+  texpdf_add_dict(dict, texpdf_new_name("BitsPerComponent"), texpdf_new_number(bpc));
 
-  smask_data_ptr = (png_bytep) NEW(width*height, png_byte);
+  smask_data_ptr = (png_bytep) NEW((bpc/8)*width*height, png_byte);
 
   switch (color_type) {
   case PNG_COLOR_TYPE_RGB_ALPHA:
+    if (bpc == 8) {
     for (i = 0; i < width*height; i++) {
       memmove(image_data_ptr+(3*i), image_data_ptr+(4*i), 3);
       smask_data_ptr[i] = image_data_ptr[4*i+3];
     }
     *rowbytes_ptr = 3*width*sizeof(png_byte);
+    } else {
+      for (i = 0; i < width*height; i++) {
+        memmove(image_data_ptr+(6*i), image_data_ptr+(8*i), 6);
+        smask_data_ptr[2*i]   = image_data_ptr[8*i+6];
+        smask_data_ptr[2*i+1] = image_data_ptr[8*i+7];
+      }
+      *rowbytes_ptr = 6*width*sizeof(png_byte);
+    }
     break;
   case PNG_COLOR_TYPE_GRAY_ALPHA:
+    if (bpc == 8) {
     for (i = 0; i < width*height; i++) {
       image_data_ptr[i] = image_data_ptr[2*i];
       smask_data_ptr[i] = image_data_ptr[2*i+1];
     }
     *rowbytes_ptr = width*sizeof(png_byte);
+    } else {
+      for (i = 0; i < width*height; i++) {
+        image_data_ptr[2*i]   = image_data_ptr[4*i];
+        image_data_ptr[2*i+1] = image_data_ptr[4*i+1];
+        smask_data_ptr[2*i]   = image_data_ptr[4*i+2];
+        smask_data_ptr[2*i+1] = image_data_ptr[4*i+3];
+      }
+      *rowbytes_ptr = 2*width*sizeof(png_byte);      
+    }
     break;
   default:
     WARN("You found a bug in pngimage.c!");
@@ -1039,7 +1075,7 @@ strip_soft_mask (png_structp png_ptr, png_infop info_ptr,
     return NULL;
   }
 
-  texpdf_add_stream(smask, smask_data_ptr, width*height);
+  texpdf_add_stream(smask, smask_data_ptr, (bpc/8)*width*height);
   RELEASE(smask_data_ptr);
 
   return smask;
@@ -1084,7 +1120,7 @@ texpdf_png_get_bbox (FILE *png_file, uint32_t *width, uint32_t *height,
   *width      = png_get_image_width (png_ptr, png_info_ptr);
   *height     = png_get_image_height(png_ptr, png_info_ptr);
 
-  if (compat_mode)
+  if (dpx_conf.compat_mode == dpx_mode_compat_mode)
     *xdensity = *ydensity = 72.0 / 100.0;
   else
   {
@@ -1103,3 +1139,5 @@ texpdf_png_get_bbox (FILE *png_file, uint32_t *width, uint32_t *height,
 
   return 0;
 }
+
+#endif /* HAVE_LIBPNG */

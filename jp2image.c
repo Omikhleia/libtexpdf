@@ -1,9 +1,11 @@
 /* This is dvipdfmx, an eXtended version of dvipdfm by Mark A. Wicks.
 
-    Copyright (C) 2002-2014 by Jin-Hwan Cho and Matthias Franz,
+    Copyright (C) 2002-2020 by Jin-Hwan Cho and Matthias Franz,
     the dvipdfmx project team.
 
     Copyright (C) 1998, 1999 by Mark A. Wicks <mwicks@kettering.edu>
+
+    Copyright (C) 2014-2025 by The SILE Typesetter (as libtexpdf).
 
     This program is free software; you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -30,6 +32,15 @@
  */
 
 #include <math.h>
+#include "system.h"
+#include "error.h"
+#include "mem.h"
+
+#include "dpxconf.h"
+
+#include "pdfobj.h"
+
+#include "jp2image.h"
 
 /* Box types. */
 #define JP2_BOX_JP__  0x6a502020  /* Signature */
@@ -135,7 +146,7 @@ read_res__data (ximage_info *info, FILE *fp, unsigned int size)
   HR_D = get_unsigned_pair(fp);
   VR_E = get_unsigned_byte(fp);
   HR_E = get_unsigned_byte(fp);
-  if (compat_mode)
+  if (dpx_conf.compat_mode == dpx_mode_compat_mode)
     info->xdensity = info->ydensity = 72.0 / 100.0;
   else {
     info->xdensity = 72.0/(((double) HR_N / HR_D) * pow(10.0, HR_E) * 0.0254);
@@ -351,14 +362,12 @@ texpdf_check_for_jp2 (FILE *fp)
 int
 jp2_include_image (pdf_ximage *ximage, FILE *fp)
 {
-  unsigned pdf_version;
   int      smask = 0;
   pdf_obj *stream, *stream_dict;
   ximage_info info;
 
-  pdf_version = texpdf_get_version();
-  if (pdf_version < 5) {
-    WARN("JPEG 2000 support requires PDF version >= 1.5 (Current setting 1.%d)\n", pdf_version);
+  if (texpdf_check_version(1, 5) < 0) {
+    WARN("JPEG 2000 support requires PDF version >= 1.5 (Current setting %d.%d)\n", pdf_get_version_major(), pdf_get_version_minor());
     return -1;
   }
 
@@ -374,13 +383,13 @@ jp2_include_image (pdf_ximage *ximage, FILE *fp)
   stream      = texpdf_new_stream(0);
   stream_dict = texpdf_stream_dict(stream);
   texpdf_add_dict(stream_dict,
-        texpdf_new_name("Filter"), texpdf_new_name("JPXDecode"));
+               texpdf_new_name("Filter"), texpdf_new_name("JPXDecode"));
   if (smask)
     texpdf_add_dict(stream_dict,
                  texpdf_new_name("SMaskInData"), texpdf_new_number(1));
   /* Read whole file */
   {
-    size_t nb_read;
+    int nb_read;
     rewind(fp);
     while ((nb_read =
         fread(work_buffer, sizeof(char), WORK_BUFFER_SIZE, fp)) > 0)

@@ -1,8 +1,10 @@
 /* This is dvipdfmx, an eXtended version of dvipdfm by Mark A. Wicks.
 
-    Copyright (C) 2002-2014 by Jin-Hwan Cho and Shunsaku Hirata,
+    Copyright (C) 2002-2020 by Jin-Hwan Cho and Shunsaku Hirata,
     the dvipdfmx project team.
     
+    Copyright (C) 2014-2025 by The SILE Typesetter (as libtexpdf).
+
     This program is free software; you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
     the Free Software Foundation; either version 2 of the License, or
@@ -24,13 +26,19 @@
 
 #include "libtexpdf.h"
 
-#define VERBOSE_LEVEL_MIN 0
-static int verbose = 0;
-void
-otl_gsub_set_verbose (void)
-{
-  verbose++;
-}
+#include "system.h"
+
+#include "error.h"
+#include "mem.h"
+#include "mfileio.h"
+#include "dpxconf.h"
+
+#include "sfnt.h"
+
+#include "otl_opt.h"
+#include "tt_gsub.h"
+
+#define VERBOSE_LEVEL_MIN 2
 
 typedef USHORT Offset;
 typedef USHORT GlyphID;
@@ -52,7 +60,7 @@ struct clt_range
   USHORT  StartCoverageIndex; /* Converage Index of first GID */
 };
 
-static long
+static int
 clt_read_record (struct clt_record *rec, sfnt *sfont)
 {
   int i;
@@ -68,7 +76,7 @@ clt_read_record (struct clt_record *rec, sfnt *sfont)
   return 6;
 }
 
-static long
+static int
 clt_read_range (struct clt_range *rec, sfnt *sfont)
 {
   ASSERT(rec && sfont);
@@ -98,10 +106,10 @@ struct clt_number_list
   USHORT *value;
 };
 
-static long
+static int
 clt_read_record_list (struct clt_record_list *list, sfnt *sfont)
 {
-  long len, i;
+  int len, i;
 
   ASSERT(list && sfont);
 
@@ -131,10 +139,10 @@ clt_release_record_list (struct clt_record_list *list)
   }
 }
 
-static long
+static int
 clt_read_number_list (struct clt_number_list *list, sfnt *sfont)
 {
-  long i;
+  int i;
 
   ASSERT(list && sfont);
 
@@ -268,10 +276,10 @@ struct clt_script_table
   struct clt_record_list LangSysRecord;
 };
 
-static long
+static int
 clt_read_script_table (struct clt_script_table *tab, sfnt *sfont)
 {
-  long len;
+  int len;
 
   ASSERT(tab && sfont);
 
@@ -299,10 +307,10 @@ struct clt_langsys_table
                                         */
 };
 
-static long
+static int
 clt_read_langsys_table (struct clt_langsys_table *tab, sfnt *sfont)
 {
-  long len;
+  int len;
 
   ASSERT(tab && sfont);
 
@@ -329,10 +337,10 @@ struct clt_feature_table
   struct clt_number_list LookupListIndex; /* LookupListIndex List */
 };
 
-static long
+static int
 clt_read_feature_table (struct clt_feature_table *tab, sfnt *sfont)
 {
-  long len;
+  int len;
 
   ASSERT(tab && sfont);
 
@@ -362,10 +370,10 @@ struct clt_lookup_table
   /* offset is from beginning of Lookup table */
 };
 
-static long
+static int
 clt_read_lookup_table (struct clt_lookup_table *tab, sfnt *sfont)
 {
-  long len;
+  int len;
 
   ASSERT(tab && sfont);
 
@@ -384,10 +392,10 @@ clt_release_lookup_table (struct clt_lookup_table *tab)
     clt_release_number_list(&tab->SubTableList);
 }
 
-static long
+static int
 clt_read_coverage (struct clt_coverage *cov, sfnt *sfont)
 {
-  long len, i;
+  int len, i;
 
   ASSERT(cov && sfont);
 
@@ -449,10 +457,10 @@ clt_release_coverage (struct clt_coverage *cov)
 }
 
 /* returns -1 if not found */
-static long
+static int
 clt_lookup_coverage (struct clt_coverage *cov, USHORT gid)
 {
-  long i;
+  int i;
 
   ASSERT(cov);
 
@@ -483,10 +491,10 @@ clt_lookup_coverage (struct clt_coverage *cov, USHORT gid)
   return -1; /* not found */
 }
 
-static long
+static int
 otl_gsub_read_single (struct otl_gsub_subtab *subtab, sfnt *sfont)
 {
-  long   len;
+  int    len;
   ULONG  offset;     /* not Offset which is USHORT */
   Offset cov_offset; /* subtable offset, offset to Coverage table */
 
@@ -539,10 +547,10 @@ otl_gsub_read_single (struct otl_gsub_subtab *subtab, sfnt *sfont)
   return len;
 }
 
-static long
+static int
 otl_gsub_read_alternate (struct otl_gsub_subtab *subtab, sfnt *sfont)
 {
-  long   len;
+  int    len;
   USHORT i, j;
   ULONG  offset;     /* not Offset which is USHORT */
   Offset cov_offset; /* subtable offset, offset to Coverage table */
@@ -571,45 +579,41 @@ otl_gsub_read_alternate (struct otl_gsub_subtab *subtab, sfnt *sfont)
   data->AlternateSetCount = altset_offsets.count;
   if (data->AlternateSetCount == 0) {
     data->AlternateSet    = NULL;
-    data->coverage.count  = 0;
-    data->coverage.format = 0;
-    data->coverage.list   = NULL;
-    return  len;
-  }
-  data->AlternateSet = NEW(data->AlternateSetCount,
-                           struct otl_gsub_altset);
-  for (i = 0; i < data->AlternateSetCount; i++) {
-    struct otl_gsub_altset *altset;
-    ULONG  altset_offset;
+  } else {
+    data->AlternateSet = NEW(data->AlternateSetCount,
+                             struct otl_gsub_altset);
+    for (i = 0; i < data->AlternateSetCount; i++) {
+      struct otl_gsub_altset *altset;
+      ULONG  altset_offset;
 
-    altset = &(data->AlternateSet[i]);
+      altset = &(data->AlternateSet[i]);
 
-    altset_offset = offset + altset_offsets.value[i];
-    sfnt_seek_set(sfont, altset_offset);
-    altset->GlyphCount = sfnt_get_ushort(sfont);
-    len += 2;
-    if (altset->GlyphCount == 0) {
-      altset->Alternate = NULL;
-      break;
-    }
-    altset->Alternate = NEW(altset->GlyphCount, GlyphID);
-    for (j = 0; j < altset->GlyphCount; j++) {
-      altset->Alternate[j] = sfnt_get_ushort(sfont);
+      altset_offset = offset + altset_offsets.value[i];
+      sfnt_seek_set(sfont, altset_offset);
+      altset->GlyphCount = sfnt_get_ushort(sfont);
       len += 2;
+      if (altset->GlyphCount == 0) {
+        altset->Alternate = NULL;
+        continue;
+      }
+      altset->Alternate = NEW(altset->GlyphCount, GlyphID);
+      for (j = 0; j < altset->GlyphCount; j++) {
+        altset->Alternate[j] = sfnt_get_ushort(sfont);
+        len += 2;
+      }
     }
+    clt_release_number_list(&altset_offsets);
   }
-  clt_release_number_list(&altset_offsets);
-
   sfnt_seek_set(sfont, offset + cov_offset);
   len += clt_read_coverage(&data->coverage, sfont);
 
   return  len;
 }
 
-static long
+static int
 otl_gsub_read_ligature (struct otl_gsub_subtab *subtab, sfnt *sfont)
 {
-  long   len;
+  int    len;
   USHORT i, j;
   ULONG  offset;     /* not Offset which is USHORT */
   Offset cov_offset; /* subtable offset, offset to Coverage table */
@@ -638,49 +642,46 @@ otl_gsub_read_ligature (struct otl_gsub_subtab *subtab, sfnt *sfont)
   data->LigSetCount = ligset_offsets.count;
   if (data->LigSetCount == 0) {
     data->LigatureSet    = NULL;
-    data->coverage.count  = 0;
-    data->coverage.format = 0;
-    data->coverage.list   = NULL;
-    return len;
-  }
-  data->LigatureSet = NEW(data->LigSetCount,
-                          struct otl_gsub_ligset);
-  for (i = 0; i < data->LigSetCount; i++) {
-    struct clt_number_list  ligset_tab;
-    struct otl_gsub_ligset *ligset;
-    ULONG  ligset_offset;
-    USHORT count;
+  } else {
+    data->LigatureSet = NEW(data->LigSetCount,
+                            struct otl_gsub_ligset);
+    for (i = 0; i < data->LigSetCount; i++) {
+      struct clt_number_list  ligset_tab;
+      struct otl_gsub_ligset *ligset;
+      ULONG  ligset_offset;
+      USHORT count;
 
-    ligset = &(data->LigatureSet[i]);
+      ligset = &(data->LigatureSet[i]);
 
-    ligset_offset = offset + ligset_offsets.value[i];
-    sfnt_seek_set(sfont, ligset_offset);
-    len += clt_read_number_list(&ligset_tab, sfont);
+      ligset_offset = offset + ligset_offsets.value[i];
+      sfnt_seek_set(sfont, ligset_offset);
+      len += clt_read_number_list(&ligset_tab, sfont);
 
-    ligset->LigatureCount = ligset_tab.count;
-    if (ligset_tab.count == 0) {
-      ligset->Ligature = NULL;
-      break;
-    }
-    ligset->Ligature = NEW(ligset_tab.count,
-                           struct otl_gsub_ligtab);
-    for (j = 0; j < ligset_tab.count; j++) {
-      sfnt_seek_set(sfont, ligset_offset + ligset_tab.value[j]);
-      ligset->Ligature[j].LigGlyph = sfnt_get_ushort(sfont);
-      ligset->Ligature[j].CompCount = sfnt_get_ushort(sfont);
-      if (ligset->Ligature[j].CompCount == 0) {
-        ligset->Ligature[j].Component = NULL;
-        break;
+      ligset->LigatureCount = ligset_tab.count;
+      if (ligset_tab.count == 0) {
+        ligset->Ligature = NULL;
+        continue;
       }
-      ligset->Ligature[j].Component =
-        NEW(ligset->Ligature[j].CompCount - 1, GlyphID);
-      for (count = 0;
-           count < ligset->Ligature[j].CompCount - 1; count++) {
-        ligset->Ligature[j].Component[count] = sfnt_get_ushort(sfont);
+      ligset->Ligature = NEW(ligset_tab.count,
+                             struct otl_gsub_ligtab);
+      for (j = 0; j < ligset_tab.count; j++) {
+        sfnt_seek_set(sfont, ligset_offset + ligset_tab.value[j]);
+        ligset->Ligature[j].LigGlyph = sfnt_get_ushort(sfont);
+        ligset->Ligature[j].CompCount = sfnt_get_ushort(sfont);
+        if (ligset->Ligature[j].CompCount == 0) {
+          ligset->Ligature[j].Component = NULL;
+          continue;
+        }
+        ligset->Ligature[j].Component =
+          NEW(ligset->Ligature[j].CompCount - 1, GlyphID);
+        for (count = 0;
+            count < ligset->Ligature[j].CompCount - 1; count++) {
+          ligset->Ligature[j].Component[count] = sfnt_get_ushort(sfont);
+        }
+        len += 4 + count * 2;
       }
-      len += 4 + count * 2;
+      clt_release_number_list(&ligset_tab);
     }
-    clt_release_number_list(&ligset_tab);
   }
   clt_release_number_list(&ligset_offsets);
 
@@ -784,7 +785,7 @@ otl_gsub_release_alternate (struct otl_gsub_subtab *subtab)
   }
 }
 
-static long
+static int
 otl_gsub_read_header (struct otl_gsub_header *head, sfnt *sfont)
 {
   ASSERT(head && sfont);
@@ -819,7 +820,7 @@ struct otl_gsub_tab
 static int
 otl_gsub_read_feat (struct otl_gsub_tab *gsub, sfnt *sfont)
 {
-  long   feat_idx, script_idx;
+  int    feat_idx, script_idx;
   ULONG  gsub_offset, offset;
   struct otl_gsub_header  head;
   struct otl_gsub_subtab *subtab = NULL;
@@ -864,7 +865,7 @@ otl_gsub_read_feat (struct otl_gsub_tab *gsub, sfnt *sfont)
     if (otl_match_optrule(script,
                           script_list.record[script_idx].tag)) {
       struct clt_script_table script_tab;
-      long   langsys_idx;
+      int    langsys_idx;
 
       offset = gsub_offset +
         head.ScriptList + script_list.record[script_idx].offset;
@@ -875,7 +876,7 @@ otl_gsub_read_feat (struct otl_gsub_tab *gsub, sfnt *sfont)
           script_tab.DefaultLangSys != 0) { 
         struct clt_langsys_table langsys_tab;
 
-        if(verbose > VERBOSE_LEVEL_MIN) {
+        if(dpx_conf.verbose_level > VERBOSE_LEVEL_MIN) {
           MESG("otl_gsub>> OTL script-language enabled: %c%c%c%c.dflt\n",
                script_list.record[script_idx].tag[0],
                script_list.record[script_idx].tag[1],
@@ -905,7 +906,7 @@ otl_gsub_read_feat (struct otl_gsub_tab *gsub, sfnt *sfont)
         if (otl_match_optrule(language, langsys_rec->tag)) {
           struct clt_langsys_table langsys_tab;
 
-          if(verbose > VERBOSE_LEVEL_MIN) {
+          if(dpx_conf.verbose_level > VERBOSE_LEVEL_MIN) {
             MESG("otl_gsub>> OTL script-language enabled: %c%c%c%c.%c%c%c%c\n",
                  script_list.record[script_idx].tag[0],
                  script_list.record[script_idx].tag[1],
@@ -943,7 +944,7 @@ otl_gsub_read_feat (struct otl_gsub_tab *gsub, sfnt *sfont)
   sfnt_seek_set(sfont, offset);
   clt_read_number_list(&lookup_list, sfont);
 
-  if(verbose > VERBOSE_LEVEL_MIN) {
+  if(dpx_conf.verbose_level > VERBOSE_LEVEL_MIN) {
     MESG("otl_gsub>> Reading OTL feature(s):");
   }
 
@@ -953,9 +954,9 @@ otl_gsub_read_feat (struct otl_gsub_tab *gsub, sfnt *sfont)
         (otl_match_optrule(feature,
                            feature_list.record[feat_idx].tag))) {
       struct clt_feature_table feature_table;
-      long   i;
+      int    i;
 
-      if(verbose > VERBOSE_LEVEL_MIN) {
+      if(dpx_conf.verbose_level > VERBOSE_LEVEL_MIN) {
         MESG(" %c%c%c%c",
              feature_list.record[feat_idx].tag[0],
              feature_list.record[feat_idx].tag[1],
@@ -969,14 +970,15 @@ otl_gsub_read_feat (struct otl_gsub_tab *gsub, sfnt *sfont)
 
       sfnt_seek_set(sfont, offset);
       clt_read_feature_table(&feature_table, sfont);
+#if 0
       if (feature_table.FeatureParams != 0) {
         ERROR("unrecognized FeatureParams");
       }
-
+#endif
       /* Lookup table */
       for (i = 0; i < feature_table.LookupListIndex.count; i++) {
         struct clt_lookup_table lookup_table;
-        long ll_idx, st_idx, r, n_st;
+        int ll_idx, st_idx, r, n_st;
 
         ll_idx = feature_table.LookupListIndex.value[i];
         if (ll_idx >= lookup_list.count)
@@ -991,7 +993,7 @@ otl_gsub_read_feat (struct otl_gsub_tab *gsub, sfnt *sfont)
             lookup_table.LookupType != OTL_GSUB_TYPE_ALTERNATE &&
             lookup_table.LookupType != OTL_GSUB_TYPE_LIGATURE  &&
             lookup_table.LookupType != OTL_GSUB_TYPE_ESUBST) {
-          if (verbose > VERBOSE_LEVEL_MIN)
+          if (dpx_conf.verbose_level > VERBOSE_LEVEL_MIN)
             WARN("Skipping unsupported GSUB subtable: LookupType=%d", lookup_table.LookupType);
           continue;
         }
@@ -1015,7 +1017,7 @@ otl_gsub_read_feat (struct otl_gsub_tab *gsub, sfnt *sfont)
             if (r <= 0)
               WARN("Reading GSUB subtable (single) failed...");
             else {
-              if(verbose > VERBOSE_LEVEL_MIN) {
+              if(dpx_conf.verbose_level > VERBOSE_LEVEL_MIN) {
                 MESG("(single)");
               }
               n_st++;
@@ -1028,7 +1030,7 @@ otl_gsub_read_feat (struct otl_gsub_tab *gsub, sfnt *sfont)
             if (r <= 0)
               WARN("Reading GSUB subtable (alternate) failed...");
             else {
-              if(verbose > VERBOSE_LEVEL_MIN) {
+              if(dpx_conf.verbose_level > VERBOSE_LEVEL_MIN) {
                 MESG("(alternate)");
               }
               n_st++;
@@ -1041,7 +1043,7 @@ otl_gsub_read_feat (struct otl_gsub_tab *gsub, sfnt *sfont)
             if (r <= 0)
               WARN("Reading GSUB subtable (ligature) failed...");
             else {
-              if(verbose > VERBOSE_LEVEL_MIN) {
+              if(dpx_conf.verbose_level > VERBOSE_LEVEL_MIN) {
                 MESG("(ligature)");
               }
               n_st++;
@@ -1068,7 +1070,7 @@ otl_gsub_read_feat (struct otl_gsub_tab *gsub, sfnt *sfont)
                 if (r <= 0)
                   WARN("Reading GSUB subtable (ext:single) failed...");
                 else {
-                  if(verbose > VERBOSE_LEVEL_MIN) {
+                  if(dpx_conf.verbose_level > VERBOSE_LEVEL_MIN) {
                     MESG("(ext:single)");
                   }
                   n_st++;
@@ -1081,7 +1083,7 @@ otl_gsub_read_feat (struct otl_gsub_tab *gsub, sfnt *sfont)
                 if (r <= 0)
                   WARN("Reading GSUB subtable (alternate) failed...");
                 else {
-                  if(verbose > VERBOSE_LEVEL_MIN) {
+                  if(dpx_conf.verbose_level > VERBOSE_LEVEL_MIN) {
                     MESG("(alternate)");
                   }
                   n_st++;
@@ -1094,7 +1096,7 @@ otl_gsub_read_feat (struct otl_gsub_tab *gsub, sfnt *sfont)
                 if (r <= 0)
                   WARN("Reading GSUB subtable (ext:ligature) failed...");
                 else {
-                  if(verbose > VERBOSE_LEVEL_MIN) {
+                  if(dpx_conf.verbose_level > VERBOSE_LEVEL_MIN) {
                     MESG("(ext:ligature)");
                   }
                   n_st++;
@@ -1116,7 +1118,7 @@ otl_gsub_read_feat (struct otl_gsub_tab *gsub, sfnt *sfont)
     }
   }
 
-  if(verbose > VERBOSE_LEVEL_MIN) {
+  if(dpx_conf.verbose_level > VERBOSE_LEVEL_MIN) {
     MESG("\n");
     MESG("otl_gsub>> %ld subtable(s) read.\n", num_subtabs);
   }
@@ -1143,7 +1145,7 @@ otl_gsub_read_feat (struct otl_gsub_tab *gsub, sfnt *sfont)
 static int
 otl_gsub_apply_single (struct otl_gsub_subtab *subtab, USHORT *gid)
 {
-  long idx;
+  int idx;
 
   ASSERT(subtab && gid);
 
@@ -1175,7 +1177,7 @@ static int
 otl_gsub_apply_alternate (struct otl_gsub_subtab *subtab,
                           USHORT alt_idx, USHORT *gid)
 {
-  long  idx;
+  int  idx;
 
   ASSERT(subtab && gid);
 
@@ -1224,7 +1226,7 @@ otl_gsub_apply_ligature (struct otl_gsub_subtab *subtab,
                          USHORT *gid_in,  USHORT num_gids,
                          USHORT *gid_out)
 {
-  long idx;
+  int idx;
 
   ASSERT(subtab && gid_out);
 
@@ -1256,10 +1258,16 @@ otl_gsub_apply_ligature (struct otl_gsub_subtab *subtab,
 }
 
 #define GSUB_LIST_MAX 32
+struct gsub_entry {
+  int                index;
+  struct gsub_entry *next;
+};
+
 struct otl_gsub
 {
   int num_gsubs;
   int select;
+  struct gsub_entry   *first;
   struct otl_gsub_tab gsubs[GSUB_LIST_MAX];
 };
 
@@ -1271,8 +1279,19 @@ otl_gsub_new (void)
   gsub_list = NEW(1, struct otl_gsub);
   gsub_list->num_gsubs = 0;
   gsub_list->select    = -1;
+  gsub_list->first     = NULL;
 
   return (otl_gsub *) gsub_list;
+}
+
+static void
+clear_chain (otl_gsub *gsub_list) {
+  struct gsub_entry *entry, *next;
+  for (entry = gsub_list->first; entry != NULL; entry = next) {
+    next = entry->next;
+    RELEASE(entry);
+  }
+  gsub_list->first = NULL;
 }
 
 int
@@ -1308,7 +1327,7 @@ otl_gsub_add_feat (otl_gsub *gsub_list,
   gsub->feature  = NEW(strlen(feature) +1, char);
   strcpy(gsub->feature,  feature);
 
-  if(verbose > VERBOSE_LEVEL_MIN) {
+  if(dpx_conf.verbose_level > VERBOSE_LEVEL_MIN) {
     MESG("\n");
     MESG("otl_gsub>> Reading \"%s.%s.%s\"...\n", script, language, feature);
   }
@@ -1318,7 +1337,7 @@ otl_gsub_add_feat (otl_gsub *gsub_list,
     gsub_list->select = i;
     gsub_list->num_gsubs++;
   } else {
-    if(verbose > VERBOSE_LEVEL_MIN) {
+    if(dpx_conf.verbose_level > VERBOSE_LEVEL_MIN) {
       MESG("otl_gsub>> Failed\n");
     }
     RELEASE(gsub->script);
@@ -1327,6 +1346,61 @@ otl_gsub_add_feat (otl_gsub *gsub_list,
   }
   
   return retval;
+}
+
+static int
+scan_otl_tag (const char *otl_tags, const char *endptr,
+              char *script, char *language, char *feature)
+{
+  const char *p, *period;
+
+  ASSERT(script && language && feature);
+
+  if (!otl_tags || otl_tags >= endptr)
+    return -1;
+
+  memset(script, ' ', 4);   script[4]   = 0;
+  memset(language, ' ', 4); language[4] = 0;
+  memset(feature, ' ', 4);  feature[4]  = 0;
+
+  /* First parse otl_tags variable */
+  p = otl_tags;
+  period = strchr(p, '.');
+  if (period && period < endptr) {
+    /* Format scrp.lang.feat */
+    if (period < p + 5) {
+      strncpy(script, p, period - p);
+    } else {
+      WARN("Invalid OTL script tag found: %s", p);
+      return -1;
+    }
+    p = period + 1;
+    period = strchr(p, '.');
+    if (period && period < endptr) {
+      /* Now lang part */
+      if (period < p + 5) {
+        strncpy(language, p, period - p);
+      } else {
+        WARN("Invalid OTL lanuage tag found: %s", p);
+        return -1;
+      }
+      p = period + 1;
+    }
+  } else {
+    strcpy(script, "*");
+    strcpy(language, "*");
+  }
+
+  /* Finally feature */
+  if (p + 4 <= endptr) {
+    strncpy(feature, p, endptr - p);
+    p = endptr;
+  } else {
+    WARN("No valid OTL feature tag specified.");
+    return -1;
+  }
+
+  return 0;
 }
 
 void
@@ -1368,7 +1442,7 @@ otl_gsub_release (otl_gsub *gsub_list)
     }
     RELEASE(gsub->subtables);
   }
-
+  clear_chain(gsub_list);
   RELEASE(gsub_list);
 }
 
@@ -1473,8 +1547,8 @@ otl_gsub_apply_lig (otl_gsub *gsub_list,
   return retval;
 }
 
-int
-otl_gsub_select (otl_gsub *gsub_list,
+static int
+gsub_find (otl_gsub *gsub_list,
                  const char *script,
                  const char *language,
                  const char *feature)
@@ -1487,108 +1561,416 @@ otl_gsub_select (otl_gsub *gsub_list,
     if (!strcmp(gsub->script,   script)   &&
         !strcmp(gsub->language, language) &&
         !strcmp(gsub->feature,  feature)) {
-      gsub_list->select = i;
       return i;
     }
   }
 
-  gsub_list->select = -1;
-
   return -1;
 }
 
-#if  0
-static int
-otl_gsub_dump_single (struct otl_gsub_subtab *subtab)
+int
+otl_gsub_select (otl_gsub *gsub_list,
+                 const char *script,
+                 const char *language,
+                 const char *feature)
 {
-  long  gid, idx;
+  gsub_list->select = gsub_find(gsub_list, script, language, feature);
+  return gsub_list->select;
+}
+
+int
+otl_gsub_set_chain (otl_gsub *gsub_list, const char *otl_tags) {
+  struct gsub_entry *prev = NULL;
+  const char *p, *nextptr, *endptr;
+  char script[5], language[5], feature[5];
+  int  idx;
+
+  clear_chain(gsub_list);
+
+  endptr = otl_tags + strlen(otl_tags);
+  for (p = otl_tags; p < endptr; p = nextptr) {
+    nextptr = strchr(p, ':');
+    if (!nextptr)
+      nextptr = endptr;
+    if (scan_otl_tag(p, nextptr, script, language, feature) >= 0) {
+      idx = gsub_find(gsub_list, script, language, feature);
+      if (idx >= 0 && idx <= gsub_list->num_gsubs) {
+        struct gsub_entry *entry;
+        entry = NEW(1, struct gsub_entry);
+          if (!gsub_list->first)
+            gsub_list->first = entry;
+        if (prev)
+          prev->next = entry;
+        entry->index = idx;
+        prev = entry;
+      }
+    }
+    nextptr++;
+  }
+  if (prev)
+    prev->next = NULL;
+
+  return 0;
+}
+
+int
+otl_gsub_add_feat_list (otl_gsub *gsub_list, const char *otl_tags, sfnt *sfont)
+{
+  const char *p, *nextptr, *endptr;
+  char script[5], language[5], feature[5];
+  int  idx;
+
+  if (!gsub_list || !otl_tags || !sfont)
+  return -1;
+
+  clear_chain(gsub_list);
+  endptr = otl_tags + strlen(otl_tags);
+  for (p = otl_tags; p < endptr; p = nextptr) {
+    nextptr = strchr(p, ':');
+    if (!nextptr)
+      nextptr = endptr;
+    if (scan_otl_tag(p, nextptr, script, language, feature) >= 0) {
+      idx = gsub_find(gsub_list, script, language, feature);
+      if (idx < 0) {
+        otl_gsub_add_feat(gsub_list, script, language, feature, sfont);
+      }
+    }
+    nextptr++;
+  }
+
+  return 0;
+}
+
+int
+otl_gsub_apply_chain (otl_gsub *gsub_list, USHORT *gid) {
+  int    retval = -1;
+  struct otl_gsub_tab    *gsub;
+  struct otl_gsub_subtab *subtab;
+  struct gsub_entry      *entry;
+  int    i, idx;
+
+  if (!gsub_list || !gid)
+    return retval;
+
+  for (entry = gsub_list->first;
+       entry != NULL; entry = entry->next) {
+    idx = entry->index;
+    if (idx < 0 || idx >= gsub_list->num_gsubs)
+      continue;
+    gsub = &(gsub_list->gsubs[idx]);
+    for (i = 0, retval = -1;
+         retval < 0 && i < gsub->num_subtables; i++) {
+      subtab = &(gsub->subtables[i]);
+      switch ((int) subtab->LookupType){
+      case OTL_GSUB_TYPE_SINGLE:
+        retval = otl_gsub_apply_single(subtab, gid);
+        break;
+      default:
+        break;
+      }
+    }
+  }
+
+  return retval;
+}
+
+#if  1
+#include "unicode.h"
+
+#ifndef is_used_char2
+#define is_used_char2(b,c) (((b)[(c)/8]) & (1 << (7-((c)%8))))
+#endif
+
+static int
+add_glyph_if_valid (CMap *cmap, char *used_chars,
+                    int32_t *map_base, int32_t *map_sub, USHORT num_glyphs,
+                    uint16_t *GIDToCIDMap, USHORT gid, USHORT gid_sub)
+{
+  int            count = 0;
+  unsigned char  src[2], dst[4];
+  unsigned char *p = dst, *endptr = dst + 4;
+  size_t         len;
+  uint16_t       cid_sub;
+
+  if (gid_sub >= num_glyphs || gid >= num_glyphs)
+    return 0;
+
+  cid_sub = GIDToCIDMap[gid_sub];
+  if (is_used_char2(used_chars, cid_sub)) {
+    int32_t ch = map_base[gid];
+    if (UC_is_valid(ch)) {
+      src[0] = (cid_sub >> 8) & 0xff;
+      src[1] = cid_sub & 0xff;
+      len = UC_UTF16BE_encode_char(ch, &p, endptr);
+      CMap_add_bfchar(cmap, src, 2, dst, len);
+      used_chars[cid_sub / 8] &= ~(1 << (7 - (cid_sub % 8)));
+      count = 1;
+    } else {
+      ch = map_sub[gid];
+      if (UC_is_valid(ch)) {
+        src[0] = (cid_sub >> 8) & 0xff;
+        src[1] = cid_sub & 0xff;
+        len = UC_UTF16BE_encode_char(ch, &p, endptr);
+        CMap_add_bfchar(cmap, src, 2, dst, len);
+        used_chars[cid_sub / 8] &= ~(1 << (7 - (cid_sub % 8)));
+        count = 1;
+      }
+    }
+  }
+  return count;
+}
+
+static int
+add_ToUnicode_single (CMap *cmap, char *used_chars,
+                      struct otl_gsub_subtab *subtab,
+                      int32_t *map_base, int32_t *map_sub, USHORT num_glyphs,
+                      uint16_t *GIDToCIDMap)
+{
+  int     count = 0;
+  USHORT  i, idx, gid;
+  USHORT  gid_sub;
 
   ASSERT(subtab);
 
   if (subtab->SubstFormat == 1) {
     struct otl_gsub_single1 *data;
+    struct clt_coverage      *cov;
 
     data = (subtab->table).single1;
-    for (gid = 0; gid < 0x10000; gid++) {
-      idx  = clt_lookup_coverage(&data->coverage, gid);
-      if (idx >= 0) {
-        fprintf(stdout, "substitute \\%u by \\%u;\n",
-                (USHORT) gid, (USHORT) (gid + data->DeltaGlyphID));
+    cov  = &data->coverage;
+    switch (cov->format) {
+    case 1: /* list */
+      for (idx = 0; idx < cov->count; idx++) {
+        gid = cov->list[idx];
+        gid_sub = gid + data->DeltaGlyphID;
+        count += add_glyph_if_valid(cmap, used_chars,
+                                    map_base, map_sub, num_glyphs,
+                                    GIDToCIDMap, gid, gid_sub);
       }
+      break;
+    case 2: /* range */
+      for (i = 0; i < cov->count; i++) {
+        for (gid = cov->range[i].Start;
+             gid <= cov->range[i].End && gid < num_glyphs; gid++) {
+          idx = cov->range[i].StartCoverageIndex + gid - cov->range[i].Start;
+          gid_sub = gid + data->DeltaGlyphID;
+          count += add_glyph_if_valid(cmap, used_chars,
+                                      map_base, map_sub, num_glyphs,
+                                      GIDToCIDMap, gid, gid_sub);     
+        }
+      }
+      break;
     }
   } else if (subtab->SubstFormat == 2) {
     struct otl_gsub_single2 *data;
+    struct clt_coverage      *cov;
 
     data = (subtab->table).single2;
-    for (gid = 0; gid < 0x10000; gid++) {
-      idx  = clt_lookup_coverage(&data->coverage, gid);
-      if (idx >= 0 &&
-          idx < data->GlyphCount) {
-        fprintf(stdout, "substitute \\%u by \\%u;\n",
-                (USHORT) gid, (data->Substitute)[idx]);
+    cov  = &data->coverage;
+    switch (cov->format) {
+    case 1: /* list */
+      for (idx = 0; idx < cov->count; idx++) {
+        gid = cov->list[idx];
+        if (idx >= 0 && idx < data->GlyphCount) {
+          gid_sub = (data->Substitute)[idx];
+          count += add_glyph_if_valid(cmap, used_chars,
+                                      map_base, map_sub, num_glyphs,
+                                      GIDToCIDMap, gid, gid_sub);
+        }
       }
+      break;
+    case 2: /* range */
+      for (i = 0; i < cov->count; i++) {
+        for (gid = cov->range[i].Start;
+             gid <= cov->range[i].End && gid < num_glyphs; gid++) {
+          idx = cov->range[i].StartCoverageIndex + gid - cov->range[i].Start;
+          if (idx >= 0 && idx < data->GlyphCount) {
+            gid_sub = (data->Substitute)[idx];
+            count += add_glyph_if_valid(cmap, used_chars,
+                                        map_base, map_sub, num_glyphs,
+                                        GIDToCIDMap, gid, gid_sub);
+          }
+        }
+      }
+      break;
     }
   }
 
-  return  0;
+  return count;
 }
 
-static int
-otl_gsub_dump_alternate (struct otl_gsub_subtab *subtab)
+static int32_t  
+add_alternate1_inverse_map (CMap *cmap, char *used_chars,
+                            int32_t *map_base, int32_t *map_sub, USHORT num_glyphs,
+                            uint16_t *GIDToCIDMap, USHORT gid, int idx,
+                            struct otl_gsub_alternate1 *data)
 {
-  long  gid, idx;
+  int32_t count = 0;
+
+  if (idx >= 0 && idx < data->AlternateSetCount) {
+    struct otl_gsub_altset *altset;
+    USHORT i;
+
+    altset = &(data->AlternateSet[idx]);
+    if (altset->GlyphCount == 0)
+      return count;
+    for (i = 0; i < altset->GlyphCount; i++) {
+      USHORT gid_alt = altset->Alternate[i];
+      count += add_glyph_if_valid(cmap, used_chars,
+                                  map_base, map_sub, num_glyphs,
+                                  GIDToCIDMap, gid, gid_alt);
+    }
+  }
+  return count;
+}
+
+static int32_t
+add_ToUnicode_alternate (CMap *cmap, char *used_chars,
+                         struct otl_gsub_subtab *subtab,
+                         int32_t *map_base, int32_t *map_sub, USHORT num_glyphs,
+                         uint16_t *GIDToCIDMap)
+{
+  int32_t count = 0;
+  USHORT  i, gid, idx;
 
   ASSERT(subtab);
 
   if (subtab->SubstFormat == 1) {
     struct otl_gsub_alternate1 *data;
-
+    struct clt_coverage        *cov;
     data = subtab->table.alternate1;
-    for (gid = 0; gid < 0x10000; gid++) {
-      idx  = clt_lookup_coverage(&data->coverage, gid);
-      if (idx >= 0 && idx < data->AlternateSetCount) {
-        struct otl_gsub_altset *altset;
-        USHORT i;
-        altset = &(data->AlternateSet[idx]);
-        if (altset->GlyphCount == 0)
-          continue;
-        fprintf(stdout, "substitute \\%u from [", (USHORT) gid);
-        for (i = 0; i < altset->GlyphCount; i++) {
-          fprintf(stdout, " \\%u", altset->Alternate[i]);
+    cov  = &data->coverage;
+    switch (cov->format) {
+    case 1: /* list */
+      for (idx = 0; idx < cov->count; idx++) {
+        gid = cov->list[idx];
+        if (gid < num_glyphs) {
+          count += add_alternate1_inverse_map(cmap, used_chars,
+                                              map_base, map_sub, num_glyphs,
+                                              GIDToCIDMap, gid, idx, data);
         }
-        fprintf(stdout, " ];\n");
+      }
+      break;
+    case 2: /* range */
+      for (i = 0; i < cov->count; i++) {
+        for (gid = cov->range[i].Start;
+             gid <= cov->range[i].End && gid < num_glyphs; gid++) {
+          idx = cov->range[i].StartCoverageIndex + gid - cov->range[i].Start;
+          count += add_alternate1_inverse_map(cmap, used_chars,
+                                              map_base, map_sub, num_glyphs,
+                                              GIDToCIDMap, gid, idx, data);
+        }
+      }
+      break;
+    }
+  }
+  return count;
+}
+
+static int32_t  
+add_ligature1_inverse_map (CMap *cmap, char *used_chars,
+                           int32_t *map_base, int32_t *map_sub, USHORT num_glyphs,
+                           uint16_t *GIDToCIDMap, USHORT gid_1, int idx,
+                           struct otl_gsub_ligature1 *data)
+{
+  int32_t count = 0;
+
+  if (idx >= 0 && idx < data->LigSetCount) {
+    struct otl_gsub_ligset *ligset;
+    USHORT                  i, j;
+
+    ligset = &(data->LigatureSet[idx]); 
+    for (j = 0; j < ligset->LigatureCount; j++) {
+      USHORT gid_sub = ligset->Ligature[j].LigGlyph;
+      if (gid_sub < num_glyphs) {
+        uint16_t cid = GIDToCIDMap[gid_sub];
+        if (is_used_char2(used_chars, cid)) {
+          int32_t ch, *ucv;
+          USHORT  comp_count = ligset->Ligature[j].CompCount;
+          int     fail_count = 0;
+
+          ucv         = NEW(comp_count, int32_t);
+          ch          = UC_is_valid(map_base[gid_1]) ? map_base[gid_1] : map_sub[gid_1];
+          ucv[0]      = ch;
+          fail_count += UC_is_valid(ch) ? 0 : 1; 
+          for (i = 0; i < ligset->Ligature[j].CompCount - 1; i++) {
+            USHORT gid = ligset->Ligature[j].Component[i];
+            if (gid < num_glyphs) {
+              ch          = UC_is_valid(map_base[gid]) ? map_base[gid] : map_sub[gid];
+              ucv[i+1]    = ch;
+              fail_count += UC_is_valid(ch) ? 0 : 1;
+           } else {
+              fail_count += 1;
+            } 
+          }
+          if (fail_count == 0) {
+            unsigned char  src[2], *dst;
+            unsigned char *p, *endptr;
+            size_t         len = 0;
+
+            src[0] = (cid >> 8) & 0xff;
+            src[1] =  cid & 0xff;
+            dst    = NEW(comp_count*4, unsigned char);
+            p      = dst;
+            endptr = dst + comp_count * 4;
+            for (i = 0; i < comp_count; i++) {
+              len += UC_UTF16BE_encode_char(ucv[i], &p, endptr);
+            }
+            CMap_add_bfchar(cmap, src, 2, dst, len);
+            used_chars[cid / 8] &= ~(1 << (7 - (cid % 8)));
+            count++;
+            RELEASE(dst);
+          }
+          RELEASE(ucv);
+        }
       }
     }
   }
 
-  return  0;
+  return count;
 }
 
-static int
-otl_gsub_dump_ligature (struct otl_gsub_subtab *subtab)
+static int32_t
+add_ToUnicode_ligature (CMap *cmap, char *used_chars,
+                        struct otl_gsub_subtab *subtab,
+                        int32_t *map_base, int32_t *map_sub, USHORT num_glyphs,
+                        uint16_t *GIDToCIDMap)
 {
-  long  gid, idx;
+  int32_t count = 0;
+  USHORT  i, idx, gid;
 
   ASSERT(subtab);
 
   if (subtab->SubstFormat == 1) {
     struct otl_gsub_ligature1 *data;
+    struct clt_coverage        *cov;
 
     data = subtab->table.ligature1;
-    for (gid = 0; gid < 0x10000; gid++) {
-      idx  = clt_lookup_coverage(&data->coverage, gid);
-      if (idx >= 0 && idx < data->LigSetCount) {
-        struct otl_gsub_ligset *ligset;
-        USHORT  i, j;
-        ligset = &(data->LigatureSet[idx]); 
-        for (j = 0; j < ligset->LigatureCount; j++) {
-          fprintf(stdout, "substitute \\%u", (USHORT) gid);
-          for (i = 0; i < ligset->Ligature[j].CompCount - 1; i++) {
-            fprintf(stdout, " \\%u", ligset->Ligature[j].Component[i]);
-          }
-          fprintf(stdout, " by \\%u;\n", ligset->Ligature[j].LigGlyph);
+    cov  = &data->coverage;
+    switch (cov->format) {
+    case 1: /* list */
+      for (idx = 0; idx < cov->count; idx++) {
+        gid = cov->list[idx];
+        if (gid < num_glyphs) {
+          count += add_ligature1_inverse_map(cmap, used_chars,
+                                             map_base, map_sub, num_glyphs,
+                                             GIDToCIDMap, gid, idx, data);
         }
       }
+      break;
+    case 2: /* range */
+      for (i = 0; i < cov->count; i++) {
+        for (gid = cov->range[i].Start;
+             gid <= cov->range[i].End && gid < num_glyphs; gid++) {
+          idx = cov->range[i].StartCoverageIndex + gid - cov->range[i].Start;
+          if (gid < num_glyphs) {
+            count += add_ligature1_inverse_map(cmap, used_chars,
+                                               map_base, map_sub, num_glyphs,
+                                               GIDToCIDMap, gid, idx, data); 
+          }
+        }
+      }
+      break;
     }
   }
 
@@ -1596,48 +1978,44 @@ otl_gsub_dump_ligature (struct otl_gsub_subtab *subtab)
 }
 
 int
-otl_gsub_dump (otl_gsub *gsub_list,
-               const char *script, const char *language, const char *feature)
+otl_gsub_add_ToUnicode (CMap *cmap, char *used_chars,
+                        int32_t *map_base, int32_t *map_sub, USHORT num_glyphs,
+                        uint16_t *GIDToCIDMap, sfnt *sfont)
 {
-  int    error = -1;
+  int       count = 0;
+  otl_gsub *gsub_list;
   struct otl_gsub_tab    *gsub;
   struct otl_gsub_subtab *subtab;
-  int    sel, i, j;
+  int       i, j;
 
-  if (!gsub_list)
-    return  -1;
+  gsub_list = otl_gsub_new();
+  otl_gsub_add_feat(gsub_list, "*", "*", "*", sfont);
 
-  sel   = gsub_list->select;
-  error = otl_gsub_select(gsub_list, script, language, feature);
-  if (error < 0) {
-    ERROR("GSUB feature %s.%s.%s not found.", script, language, feature);
-  }
-
-  i = gsub_list->select;
-  if (i < 0 || i >= gsub_list->num_gsubs) {
-    ERROR("GSUB not selected...");
-    return -1;
-  }
-  gsub = &(gsub_list->gsubs[i]);
-
-  for (j = 0;
-       !error &&
-       j < gsub->num_subtables; j++) {
-    subtab = &(gsub->subtables[j]);
-    switch ((int) subtab->LookupType){
-    case OTL_GSUB_TYPE_SINGLE:
-      error = otl_gsub_dump_single(subtab);
-      break;
-    case OTL_GSUB_TYPE_ALTERNATE:
-      error = otl_gsub_dump_alternate(subtab);
-      break;
-    case OTL_GSUB_TYPE_LIGATURE:
-      error = otl_gsub_dump_ligature(subtab);
-      break;
+  for (i = 0; i < gsub_list->num_gsubs; i++) {
+    gsub = &(gsub_list->gsubs[i]);
+    for (j = 0; j < gsub->num_subtables; j++) {
+      subtab = &(gsub->subtables[j]);
+      switch ((int) subtab->LookupType){
+      case OTL_GSUB_TYPE_SINGLE:
+        count += add_ToUnicode_single(cmap, used_chars, subtab,
+                                      map_base, map_sub, num_glyphs,
+                                      GIDToCIDMap);
+        break;
+      case OTL_GSUB_TYPE_ALTERNATE:
+        count += add_ToUnicode_alternate(cmap, used_chars, subtab,
+                                         map_base, map_sub, num_glyphs,
+                                         GIDToCIDMap);
+        break;
+      case OTL_GSUB_TYPE_LIGATURE:
+        count += add_ToUnicode_ligature(cmap, used_chars, subtab,
+                                        map_base, map_sub, num_glyphs,
+                                        GIDToCIDMap);
+        break;
+      }
     }
   }
-  gsub_list->select = sel;
+  otl_gsub_release(gsub_list);
 
-  return  error;
+  return count;
 }
 #endif

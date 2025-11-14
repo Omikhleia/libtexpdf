@@ -1,9 +1,11 @@
 /* This is dvipdfmx, an eXtended version of dvipdfm by Mark A. Wicks.
 
-    Copyright (C) 2002-2014 by Jin-Hwan Cho and Shunsaku Hirata,
+    Copyright (C) 2002-2020 by Jin-Hwan Cho and Shunsaku Hirata,
     the dvipdfmx project team.
     
     Copyright (C) 1998, 1999 by Mark A. Wicks <mwicks@kettering.edu>
+
+    Copyright (C) 2014-2025 by The SILE Typesetter (as libtexpdf).
 
     This program is free software; you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -25,7 +27,6 @@
 
 #include <stdio.h>
 #include "numbers.h"
-#include "libtexpdf.h"
 
 #ifdef IODEBUG
 FILE *mfopen (const char *name, const char *mode,
@@ -36,27 +37,33 @@ int mfclose (FILE *file, const char *function, int line);
 #define MFCLOSE(file) \
    mfclose((file),__FUNCTION__,__LINE__)
 #else
+#if defined(WIN32)
+extern FILE *generic_fsyscp_fopen(const char *fname, const char *mode);
+#define MFOPEN(name,mode) generic_fsyscp_fopen((name),(mode))
+#else
 #define MFOPEN(name,mode) fopen((name),(mode))
+#endif
 #define MFCLOSE(file) fclose(file)
 #endif
 
-extern void seek_absolute (FILE *file, long pos);
-extern void seek_relative (FILE *file, long pos);
+extern void seek_absolute (FILE *file, int32_t pos);
+extern void seek_relative (FILE *file, int32_t pos);
 
 extern void seek_end (FILE *file);
 
-extern long tell_position (FILE *file);
+extern int32_t tell_position (FILE *file);
 
-extern long file_size (FILE *file);
+extern int32_t file_size (FILE *file);
 
-#define xseek_absolute(file, pos, name) fseeko (file, (off_t)(pos), SEEK_SET)
-#define xseek_relative(file, pos, name) fseeko (file, (off_t)(pos), SEEK_CUR)
-#define xseek_end(file, name) fseeko (file, (off_t)0, SEEK_END)
-#define xtell_position(file, name) ftello (file)
+#define xseek_absolute(file, pos, name) xfseeko (file, (off_t)(pos), SEEK_SET, name)
+#define xseek_relative(file, pos, name) xfseeko (file, (off_t)(pos), SEEK_CUR, name)
+#define xseek_end(file, name) xfseeko (file, (off_t)0, SEEK_END, name)
+#define xtell_position(file, name) xftello (file, name)
 
 extern off_t xfile_size (FILE *file, const char *name);
 
-extern char *mfgets (char *buffer, int length, FILE *file);
+extern char *mfgets   (char *buffer, int length, FILE *file);
+extern int   mfreadln (char *buffer, int length, FILE *file);
 
 extern char work_buffer[];
 

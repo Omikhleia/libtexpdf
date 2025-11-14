@@ -1,9 +1,11 @@
 /* This is dvipdfmx, an eXtended version of dvipdfm by Mark A. Wicks.
 
-    Copyright (C) 2002-2014 by Jin-Hwan Cho and Shunsaku Hirata,
+    Copyright (C) 2002-2020 by Jin-Hwan Cho and Shunsaku Hirata,
     the dvipdfmx project team.
     
     Copyright (C) 1998, 1999 by Mark A. Wicks <mwicks@kettering.edu>
+
+    Copyright (C) 2014-2025 by The SILE Typesetter (as libtexpdf).
 
     This program is free software; you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -27,9 +29,9 @@
 #include "pdfobj.h"
 
 /* Please remove this */
-extern void texpdf_dump (const char *start, const char *end);
+extern void dump (const char *start, const char *end);
 
-extern void skip_line  (const char **start, const char *end);
+extern void pdfparse_skip_line (const char **start, const char *end);
 extern void texpdf_skip_white (const char **start, const char *end);
 
 extern char *texpdf_parse_number   (const char **start, const char *end);
@@ -48,6 +50,15 @@ extern pdf_obj *texpdf_parse_pdf_dict    (const char **pp, const char *endptr, p
 extern pdf_obj *texpdf_parse_pdf_array   (const char **pp, const char *endptr, pdf_file *pf);
 extern pdf_obj *texpdf_parse_pdf_object  (const char **pp, const char *endptr, pdf_file *pf);
 
-extern pdf_obj *texpdf_parse_texpdf_tainted_dict (const char **pp, const char *endptr);
+extern pdf_obj *texpdf_parse_pdf_object_extended (const char **pp, const char *endptr, pdf_file *pf,
+                                           pdf_obj* (*unknown_handler) (const char **pp,
+                                                                        const char *endptr,
+                                                                        void *user_data),
+                                           void *user_data);
+extern pdf_obj *texpdf_parse_pdf_tainted_dict (const char **pp, const char *endptr,
+                                        pdf_obj* (*unknown_handler) (const char **pp,
+                                                                     const char *endptr,
+                                                                     void *user_data),
+                                        void *user_data);
 
 #endif /* _PDFPARSE_H_ */

@@ -1,9 +1,11 @@
 /* This is dvipdfmx, an eXtended version of dvipdfm by Mark A. Wicks.
 
-    Copyright (C) 2007-2014 by Jin-Hwan Cho and Shunsaku Hirata,
+    Copyright (C) 2002-2021 by Jin-Hwan Cho and Shunsaku Hirata,
     the dvipdfmx project team.
     
     Copyright (C) 1998, 1999 by Mark A. Wicks <mwicks@kettering.edu>
+
+    Copyright (C) 2014-2025 by The SILE Typesetter (as libtexpdf).
 
     This program is free software; you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -21,6 +23,22 @@
 */
 
 #include "libtexpdf.h"
+
+#include "system.h"
+#include "mem.h"
+#include "error.h"
+
+#include "dpxfile.h"
+
+#include "numbers.h"
+#include "pdfobj.h"
+#include "pdfdev.h" /* pdf_rect */
+
+#include "pdfencoding.h"
+#include "pdffont.h"
+
+#include "pkfont.h"
+
 #define ENABLE_GLYPHENC  1
 
 #ifndef PKFONT_DPI_DEFAULT
@@ -28,11 +46,6 @@
 #endif
 
 static unsigned base_dpi = PKFONT_DPI_DEFAULT;
-static pk_open_handler_t pk_open_handler = NULL;
-
-void texpdf_set_pk_open_handler(pk_open_handler_t handler) {
-  pk_open_handler = handler;
-}
 
 void
 PKFont_set_dpi (int dpi)
@@ -53,11 +66,11 @@ truedpi (const char *ident, double point_size, unsigned bdpi)
   double    design_size;
   int       tfm_id;
 
-  tfm_id = texpdf_tfm_open(NULL, ident, 0);
+  tfm_id = tfm_open(ident, 0);
   if (tfm_id < 0)
     return  dpi;
 
-  design_size = texpdf_tfm_get_design_size(tfm_id);
+  design_size = tfm_get_design_size(tfm_id);
   if (design_size <= 0.0)
     WARN("DESGIN_SIZE <= 0.0? (TFM=\"%s\")", ident);
   else {
@@ -67,28 +80,49 @@ truedpi (const char *ident, double point_size, unsigned bdpi)
   return  dpi;
 }
 
-int
-pdf_font_open_pkfont (pdf_font *font)
+static FILE *
+dpx_open_pk_font_at (const char *ident, unsigned dpi)
 {
-  char     *ident;
-  double    point_size;
-  int       encoding_id;
+  FILE  *fp;
+  char  *fqpn;
+  kpse_glyph_file_type kpse_file_info;
+
+/* 
+   If pdftex.map is used, there are cases for example ident is like
+   cmr10.pfb. Because of the suffix .pfb here, mktexpk does not
+   work right. So we remove the suffix .pfb, if it exists.
+*/
+  fqpn = strrchr(ident, '.');
+  if (fqpn && strcasecmp(fqpn, ".pfb") == 0) {
+    *fqpn = '\0';
+  }
+  fqpn = kpse_find_glyph(ident, dpi, kpse_pk_format, &kpse_file_info);
+  if (!fqpn)
+    return  NULL;
+  fp   = MFOPEN(fqpn, FOPEN_RBIN_MODE);
+  RELEASE(fqpn);
+
+  return  fp;
+}
+
+
+int
+pdf_font_open_pkfont (pdf_font *font, const char *ident, int index, int encoding_id, int embedding, double point_size)
+{
   unsigned  dpi;
   FILE     *fp;
 
-  ident       = pdf_font_get_ident(font);
-  point_size  = pdf_font_get_param(font, PDF_FONT_PARAM_POINT_SIZE);
-  encoding_id = pdf_font_get_encoding(font);
-
   if (!ident || point_size <= 0.0)
     return  -1;
+  if (!embedding) {
+    WARN("Ignoring no-embed option for PK font: %s", ident);
+  }
+  if (index != 0) {
+    WARN("Ignoring font index option for PK font: %s", ident);
+  }
 
   dpi = truedpi(ident, point_size, base_dpi);
-  if (!pk_open_handler) {
-    WARN("PK font used but no handler declared!");
-    return -1;
-  }
-  fp  = (pk_open_handler)(ident, dpi);
+  fp  = dpx_open_pk_font_at(ident, dpi);
   if (!fp)
     return  -1;
   MFCLOSE(fp);
@@ -96,7 +130,8 @@ pdf_font_open_pkfont (pdf_font *font)
   /* Type 3 fonts doesn't have FontName.
    * FontFamily is recommended for PDF 1.5.
    */
-  pdf_font_set_fontname(font, ident);
+  font->fontname = NEW(strlen(ident)+1, char);
+  strcpy(font->fontname, ident);
 
   if (encoding_id >= 0) {
     pdf_encoding_used_by_type3(encoding_id);
@@ -476,15 +511,14 @@ pdf_font_load_pkfont (pdf_font *font)
 #endif /* ENABLE_GLYPHENC */
   int       error = 0;
 
-  if (!pdf_font_is_in_use(font)) {
+  if (!font->reference)
     return 0;
-  }
 
-  ident       = pdf_font_get_ident(font);
-  point_size  = pdf_font_get_param(font, PDF_FONT_PARAM_POINT_SIZE);
-  usedchars   = pdf_font_get_usedchars(font);
+  ident       = font->filename;
+  point_size  = font->point_size;
+  usedchars   = font->usedchars;
 #if  ENABLE_GLYPHENC
-  encoding_id = pdf_font_get_encoding(font);
+  encoding_id = font->encoding_id;
   if (encoding_id < 0)
     enc_vec = NULL;
   else {
@@ -495,11 +529,7 @@ pdf_font_load_pkfont (pdf_font *font)
   ASSERT(ident && usedchars && point_size > 0.0);
 
   dpi  = truedpi(ident, point_size, base_dpi);
-  if (!pk_open_handler) {
-    ERROR("PK font used but no handler declared!");
-    return -1;
-  }
-  fp  = (pk_open_handler)(ident, dpi);
+  fp   = dpx_open_pk_font_at(ident, dpi);
   if (!fp) {
     ERROR("Could not find/open PK font file: %s (at %udpi)", ident, dpi);
   }

@@ -1,9 +1,11 @@
 /* This is dvipdfmx, an eXtended version of dvipdfm by Mark A. Wicks.
 
-    Copyright (C) 2002-2015 by Jin-Hwan Cho and Shunsaku Hirata,
+    Copyright (C) 2002-2020 by Jin-Hwan Cho and Shunsaku Hirata,
     the dvipdfmx project team.
 
     Copyright (C) 1998, 1999 by Mark A. Wicks <mwicks@kettering.edu>
+
+    Copyright (C) 2014-2025 by The SILE Typesetter (as libtexpdf).
 
     This program is free software; you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -26,6 +28,16 @@
  * BMP SUPPORT: Not fully supported.
  *   Unsupported features: Transparency, etc.
  */
+
+#include "system.h"
+#include "error.h"
+#include "mem.h"
+
+#include "dpxconf.h"
+
+#include "pdfobj.h"
+
+#include "bmpimage.h"
 
 #define DIB_FILE_HEADER_SIZE 14
 #define DIB_CORE_HEADER_SIZE 12
@@ -76,7 +88,7 @@ texpdf_check_for_bmp (FILE *fp)
 static void
 get_density (double *xdensity, double *ydensity, struct hdr_info *hdr)
 {
-  if (compat_mode)
+  if (dpx_conf.compat_mode == dpx_mode_compat_mode)
     *xdensity = *ydensity = 72.0 / 100.0;
   else if (hdr->x_pix_per_meter > 0 && hdr->y_pix_per_meter > 0) { /* 0 for undefined. FIXME */
       *xdensity = 72.0 / (hdr->x_pix_per_meter * 0.0254);
@@ -113,7 +125,7 @@ bmp_include_image (pdf_ximage *ximage, FILE *fp)
   struct hdr_info hdr;
   int  num_palette, flip;
   int  i;
- 
+
   texpdf_ximage_init_image_info(&info);
 
   stream = stream_dict = colorspace = NULL;
@@ -218,18 +230,18 @@ bmp_include_image (pdf_ximage *ximage, FILE *fp)
     } else if (hdr.compression == DIB_COMPRESS_RLE8) {
       stream_data_ptr = NEW(rowbytes*info.height, unsigned char);
       if (read_raster_rle8(stream_data_ptr, info.width, info.height, fp) < 0) {
-	       WARN("Reading BMP raster data failed...");
-	       texpdf_release_obj(stream);
-	       RELEASE(stream_data_ptr);
-	       return -1;
+        WARN("Reading BMP raster data failed...");
+        texpdf_release_obj(stream);
+        RELEASE(stream_data_ptr);
+        return -1;
       }
     } else if (hdr.compression == DIB_COMPRESS_RLE4) {
-               stream_data_ptr = NEW(rowbytes*info.height, unsigned char);
+      stream_data_ptr = NEW(rowbytes*info.height, unsigned char);
       if (read_raster_rle4(stream_data_ptr, info.width, info.height, fp) < 0) {
-	      WARN("Reading BMP raster data failed...");
-	      texpdf_release_obj(stream);
-	      RELEASE(stream_data_ptr);
-	      return -1;
+        WARN("Reading BMP raster data failed...");
+        texpdf_release_obj(stream);
+        RELEASE(stream_data_ptr);
+        return -1;
       }
     } else {
       WARN("Unknown/Unsupported compression type for BMP image: %ld", hdr.compression);
@@ -258,6 +270,12 @@ bmp_include_image (pdf_ximage *ximage, FILE *fp)
     RELEASE(stream_data_ptr);
   }
 
+  /* Predictor is usually not so efficient for indexed images. */
+  if (hdr.bit_count >= 24 && info.bits_per_component >= 8 &&
+      info.height > 64) {
+    pdf_stream_set_predictor(stream, 15, info.width,
+                             info.bits_per_component, info.num_components);
+  }
   texpdf_ximage_set_image(ximage, &info, stream);
 
   return 0;

@@ -1,9 +1,11 @@
 /* This is dvipdfmx, an eXtended version of dvipdfm by Mark A. Wicks.
 
-    Copyright (C) 2002-2014 by Jin-Hwan Cho and Shunsaku Hirata,
+    Copyright (C) 2002-2020 by Jin-Hwan Cho and Shunsaku Hirata,
     the dvipdfmx project team.
 
     Copyright (C) 1998, 1999 by Mark A. Wicks <mwicks@kettering.edu>
+
+    Copyright (C) 2014-2025 by The SILE Typesetter (as libtexpdf).
 
     This program is free software; you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -25,6 +27,16 @@
  */
 
 #include "libtexpdf.h"
+
+#include "system.h"
+#include "mem.h"
+#include "error.h"
+
+#include "dpxutil.h"
+
+#include "pdfobj.h"
+
+#include "pdfresource.h"
 
 #define PDF_RESOURCE_DEBUG_STR "PDF"
 #define PDF_RESOURCE_DEBUG     3
@@ -80,7 +92,7 @@ struct res_cache
 static struct res_cache resources[PDF_NUM_RESOURCE_CATEGORIES];
 
 static void
-texpdf_init_resource (pdf_res *res)
+pdf_init_resource (pdf_res *res)
 {
   ASSERT(res);
 
@@ -177,7 +189,7 @@ get_category (const char *category)
   return -1;
 }
 
-long
+int
 pdf_defineresource (const char *category,
 		    const char *resname, pdf_obj *object, int flags)
 {
@@ -209,7 +221,7 @@ pdf_defineresource (const char *category,
 	} else {
 	  res->object = object;
 	}
-	return (long) ((cat_id << 16)|(res_id));
+	return (cat_id << 16) | res_id;
       }
     }
   } else {
@@ -223,7 +235,7 @@ pdf_defineresource (const char *category,
     }
     res = &rc->resources[res_id];
 
-    texpdf_init_resource(res);
+    pdf_init_resource(res);
     if (resname && resname[0] != '\0') {
       res->ident = NEW(strlen(resname) + 1, char);
       strcpy(res->ident, resname);
@@ -239,7 +251,7 @@ pdf_defineresource (const char *category,
     rc->count++;
   }
 
-  return (long) ((cat_id << 16)|(res_id));
+  return (cat_id << 16) | res_id;
 }
 
 #if 0
@@ -270,7 +282,7 @@ pdf_resource_exist (const char *category, const char *resname)
 }
 #endif
 
-long
+int
 pdf_findresource (const char *category, const char *resname)
 {
   pdf_res *res;
@@ -289,7 +301,7 @@ pdf_findresource (const char *category, const char *resname)
   for (res_id = 0; res_id < rc->count; res_id++) {
     res = &rc->resources[res_id];
     if (!strcmp(resname, res->ident)) {
-      return (long) (cat_id << 16|res_id);
+      return cat_id << 16 | res_id;
     }
   }
 
@@ -297,7 +309,7 @@ pdf_findresource (const char *category, const char *resname)
 }
 
 pdf_obj *
-texpdf_get_resource_reference (long rc_id)
+texpdf_get_resource_reference (int rc_id)
 {
   int  cat_id, res_id;
   struct res_cache *rc;
@@ -332,7 +344,7 @@ texpdf_get_resource_reference (long rc_id)
 
 #if 0
 pdf_obj *
-texpdf_get_resource (long rc_id)
+texpdf_get_resource (int rc_id)
 {
   int  cat_id, res_id;
   struct res_cache *rc;

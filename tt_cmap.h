@@ -1,8 +1,10 @@
 /* This is dvipdfmx, an eXtended version of dvipdfm by Mark A. Wicks.
 
-    Copyright (C) 2002-2014 by Jin-Hwan Cho and Shunsaku Hirata,
+    Copyright (C) 2002-2020 by Jin-Hwan Cho and Shunsaku Hirata,
     the dvipdfmx project team.
     
+    Copyright (C) 2014-2025 by The SILE Typesetter (as libtexpdf).
+
     This program is free software; you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
     the Free Software Foundation; either version 2 of the License, or
@@ -22,8 +24,6 @@
 #define _TT_CMAP_H_
 
 #include "sfnt.h"
-
-extern void otf_cmap_set_verbose (void);
 
 /* TrueType cmap table */
 typedef struct
@@ -60,19 +60,19 @@ typedef struct
 
 extern tt_cmap *tt_cmap_read    (sfnt *sfont, USHORT platform, USHORT encoding);
 
-extern USHORT   tt_cmap_lookup  (tt_cmap *cmap, long cc);
+extern USHORT   tt_cmap_lookup  (tt_cmap *cmap, ULONG cc);
 extern void     tt_cmap_release (tt_cmap *cmap);
+
+extern USHORT tt_cmap_uvs_lookup(tt_cmap* cmap_uvs, tt_cmap* cmap_default, ULONG unicode, ULONG uvs);
 
 #include "pdfobj.h"
 
 /* Indirect reference */
 extern pdf_obj *otf_create_ToUnicode_stream (const char *map_name,
-                                             int ttc_index,
-                                             const char *used_chars,
-                                             int cmap_id);
+                                             uint32_t    ttc_index,
+                                             const char *basefont,
+                                             const char *used_chars);
 /* CMap ID */
-extern int      otf_load_Unicode_CMap       (const char *map_name,
-					     int ttc_index,
-					     const char *otl_opts, int wmode);
-
+extern int  otf_load_Unicode_CMap (const char *map_name, uint32_t ttc_index, const char *otl_opts, int wmode);
+extern int  otf_try_load_GID_to_CID_map (const char *map_name, uint32_t ttc_index, int wmode);
 #endif /* _TT_CMAP_H_ */

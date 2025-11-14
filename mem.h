@@ -1,9 +1,11 @@
 /* This is dvipdfmx, an eXtended version of dvipdfm by Mark A. Wicks.
 
-    Copyright (C) 2002-2014 by Jin-Hwan Cho and Shunsaku Hirata,
+    Copyright (C) 2002-2020 by Jin-Hwan Cho and Shunsaku Hirata,
     the dvipdfmx project team.
     
     Copyright (C) 1998, 1999 by Mark A. Wicks <mwicks@kettering.edu>
+
+    Copyright (C) 2014-2025 by The SILE Typesetter (as libtexpdf).
 
     This program is free software; you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -24,12 +26,27 @@
 #define _MEM_H_
 
 #include <stdlib.h>
+#ifdef HAVE_INTTYPES_H
+# include <inttypes.h>
+#endif
+#ifdef HAVE_STDINT_H
+# include <stdint.h>
+#endif
 
-extern void *new (size_t size);
-extern void *renew (void *p, size_t size);
+extern void *new (uint32_t size);
+extern void *renew (void *p, uint32_t size);
 
-#define NEW(n,type)     (type *) new(((size_t)(n))*sizeof(type))
-#define RENEW(p,n,type) (type *) renew(p,(n)*sizeof(type))
+#define NEW(n,type)     (type *) new(((uint32_t)(n))*sizeof(type))
+#define RENEW(p,n,type) (type *) renew(p,((uint32_t)(n))*sizeof(type))
 #define RELEASE(p)      free(p)
 
+/* 
+ * mem.h is not suitable for the following, but it is the only common
+ * header file for dpxcrypt.c, pdfencrypt.c, and pdffont.c, which use
+ * the function rand().
+ */
+extern void init_genrand(unsigned long long s);
+extern long genrand_int31(void);
+#define srand(x) init_genrand((x))
+#define rand()   genrand_int31()
 #endif /* _MEM_H_ */

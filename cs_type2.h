@@ -1,8 +1,10 @@
 /* This is dvipdfmx, an eXtended version of dvipdfm by Mark A. Wicks.
 
-    Copyright (C) 2002-2014 by Jin-Hwan Cho and Shunsaku Hirata,
+    Copyright (C) 2002-2020 by Jin-Hwan Cho and Shunsaku Hirata,
     the dvipdfmx project team.
     
+    Copyright (C) 2014-2025 by The SILE Typesetter (as libtexpdf).
+
     This program is free software; you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
     the Free Software Foundation; either version 2 of the License, or
@@ -35,9 +37,9 @@ typedef struct {
   } seac;   /* unused in Type 2 charstring */
 } cs_ginfo;
 
-extern long cs_copy_charstring (card8 *dest, long destlen,
-				card8 *src, long srclen,
-				cff_index *gsubr, cff_index *subr,
-				double default_width, double nominal_width, cs_ginfo *ginfo);
+extern int cs_copy_charstring (card8 *dest, int destlen,
+			       card8 *src, int srclen,
+			       cff_index *gsubr, cff_index *subr,
+			       double default_width, double nominal_width, cs_ginfo *ginfo);
 
 #endif /* _CS_TYPE2_H_ */

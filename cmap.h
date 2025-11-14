@@ -1,7 +1,9 @@
 /* This is dvipdfmx, an eXtended version of dvipdfm by Mark A. Wicks.
 
-    Copyright (C) 2002-2014 by Jin-Hwan Cho and Shunsaku Hirata,
+    Copyright (C) 2002-2020 by Jin-Hwan Cho and Shunsaku Hirata,
     the dvipdfmx project team.
+
+    Copyright (C) 2014-2025 by The SILE Typesetter (as libtexpdf).
 
     This program is free software; you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -17,11 +19,6 @@
     along with this program; if not, write to the Free Software
     Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA.
 */
-/**
-@file
-@brief Convert characters between Unicode values and CIDs.
-*/
-/* XXX I don't know how these work so someone else will have to fill this in. - SC */
 
 #ifndef _CMAP_H_
 #define _CMAP_H_
@@ -61,7 +58,6 @@ typedef struct CMap CMap;
 
 /************************** CMAP_MAIN **************************/
 
-extern void CMap_set_verbose (void);
 extern void CMap_set_silent  (int value);
 
 extern CMap  *CMap_new     (void);
@@ -102,21 +98,18 @@ extern int CMap_add_notdefrange (CMap *cmap,
 
 extern int  CMap_add_codespacerange (CMap *cmap,
 				     const unsigned char *codelo, const unsigned char *codehi, int dim);
-extern int  CMap_match_codespace    (CMap *cmap, const unsigned char *c, int dim);
 
 extern void CMap_decode_char (CMap *cmap,
-			      const unsigned char **inbuf, long *inbytesleft,
-			      unsigned char **outbuf, long *outbytesleft);
+			      const unsigned char **inbuf, int *inbytesleft,
+			      unsigned char **outbuf, int *outbytesleft);
 
-extern long texpdf_CMap_decode (CMap *cmap,
-			 const unsigned char **inbuf,  long *inbytesleft,
-			 unsigned char **outbuf, long *outbytesleft);
-
-extern int  CMap_reverse_decode(CMap *cmap, CID cid);
+extern int  CMap_decode (CMap *cmap,
+			 const unsigned char **inbuf,  int *inbytesleft,
+			 unsigned char **outbuf, int *outbytesleft);
 
 extern void  CMap_cache_init  (void);
-extern CMap *texpdf_CMap_cache_get   (int id);
-extern int   texpdf_CMap_cache_find  (const char *cmap_name);
+extern CMap *CMap_cache_get   (int id);
+extern int   CMap_cache_find  (const char *cmap_name);
 extern void  CMap_cache_close (void);
 extern int   CMap_cache_add   (CMap *cmap);
 

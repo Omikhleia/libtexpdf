@@ -1,9 +1,11 @@
 /* This is dvipdfmx, an eXtended version of dvipdfm by Mark A. Wicks.
 
-    Copyright (C) 2002-2014 by Jin-Hwan Cho and Shunsaku Hirata,
+    Copyright (C) 2002-2020 by Jin-Hwan Cho and Shunsaku Hirata,
     the dvipdfmx project team.
 
     Copyright (C) 1998, 1999 by Mark A. Wicks <mwicks@kettering.edu>
+
+    Copyright (C) 2014-2025 by The SILE Typesetter (as libtexpdf).
 
     This program is free software; you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -20,19 +22,17 @@
     Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA.
 */
 
-#ifdef HAVE_CONFIG_H
-#include <config.h>
-#endif
+#include "libtexpdf.h"
 
 #include <stdarg.h>
 #include <stdio.h>
 
-#ifdef HAVE_STDLIB_H
-#include <stdlib.h>
-#endif
-
+/* BEGIN LIBTEXPDF PATCH */
+/* Remove dvipdfmx.h include and add my_name static definition */
+static char *my_name = "libtexpdf";
+/* END LIBTEXPDF PATCH */
 #include "error.h"
-#include "pdfobj.h"
+
 #define DPX_MESG        0
 #define DPX_MESG_WARN   1
 #define DPX_MESG_ERROR  2
@@ -40,13 +40,15 @@
 static int _mesg_type = DPX_MESG;
 #define WANT_NEWLINE() (_mesg_type != DPX_MESG_WARN && _mesg_type != DPX_MESG_ERROR)
 
-static int  debug_level = 2;
-static char* my_name = "libtexpdf";
+/* BEGIN LIBTEXPDF PATCH */
+/* Set default level to DPX_MESG_ERROR */
+static int really_quiet = DPX_MESG_ERROR;
+/* END LIBTEXPDF PATCH */
 
 void
 texpdf_debug_level (int quietness)
 {
-  debug_level = quietness;
+  really_quiet = quietness;
 }
 
 void
@@ -54,7 +56,7 @@ MESG (const char *fmt, ...)
 {
   va_list argp;
 
-  if (debug_level < 1) {
+  if (really_quiet < 1) {
     va_start(argp, fmt);
     vfprintf(stderr, fmt, argp);
     va_end(argp);
@@ -67,7 +69,7 @@ WARN (const char *fmt, ...)
 {
   va_list argp;
 
-  if (debug_level < 2) {
+  if (really_quiet < 2) {
     if (WANT_NEWLINE())
       fprintf(stderr, "\n");
     fprintf(stderr, "%s:warning: ", my_name);
@@ -85,7 +87,7 @@ ERROR (const char *fmt, ...)
 {
   va_list argp;
 
-  if (debug_level < 3) {
+  if (really_quiet < 3) {
     if (WANT_NEWLINE())
       fprintf(stderr, "\n");
     fprintf(stderr, "%s:fatal: ", my_name);
@@ -94,6 +96,6 @@ ERROR (const char *fmt, ...)
     va_end(argp);
     fprintf(stderr, "\n");
   }
-  texpdf_error_cleanup();
+  error_cleanup();
   exit( 1 );
 }

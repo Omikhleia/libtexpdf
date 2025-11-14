@@ -1,9 +1,11 @@
 /* This is dvipdfmx, an eXtended version of dvipdfm by Mark A. Wicks.
 
-    Copyright (C) 2002-2014 by Jin-Hwan Cho and Shunsaku Hirata,
+    Copyright (C) 2002-2021 by Jin-Hwan Cho and Shunsaku Hirata,
     the dvipdfmx project team.
     
     Copyright (C) 1998, 1999 by Mark A. Wicks <mwicks@kettering.edu>
+
+    Copyright (C) 2014-2025 by The SILE Typesetter (as libtexpdf).
 
     This program is free software; you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -21,13 +23,28 @@
 */
 
 #include "libtexpdf.h"
+
+#include <string.h>
+
+#include "system.h"
+#include "mem.h"
+#include "mfileio.h"
+#include "error.h"
+
+#include "numbers.h"
+#include "dpxconf.h"
+#include "dpxutil.h"
+
+#include "tfm.h"
+/* BEGIN LIBTEXPDF PATCH */
+/* Remove dvi.h include and disable pTeX vertical metrics */
+static int dvi_ptex_with_vert = 0;
+/* END LIBTEXPDF PATCH */
+
 #define TFM_FORMAT 1
 #define OFM_FORMAT 2
 
 #define FWBASE ((double) (1<<20))
-
-static int verbose = 0;
-
 
 #ifndef WITHOUT_ASCII_PTEX
 /*
@@ -37,10 +54,12 @@ static int verbose = 0;
 #define JFMV_ID  9
 #define IS_JFM(i) ((i) == JFM_ID || (i) == JFMV_ID)
 
-#define CHARACTER_INDEX(i)  ((i > 0xFFFFUL ? 0x10000UL : i))
+#define CHARACTER_INDEX(i)  ((i > UCS_LASTCHAR ? UCS_LASTCHAR+1 : i))
 #else
 #define CHARACTER_INDEX(i)  ((i))
 #endif
+
+#define IS_WIDE_CHAR(i)     (((i)>=0x2E80 && !(0xFB00<=(i) && (i)<=0xFB06)))
 
 /*
  * TFM Record structure:
@@ -63,12 +82,12 @@ struct tfm_font
   uint32_t nitcor, nlig, nkern, nextens;
   uint32_t nfonparm;
 #ifndef WITHOUT_OMEGA
-  uint32_t fontdir;
+  uint32_t fontdir, iswide;
   uint32_t nco, ncw, npc;
 #endif /* !WITHOUT_OMEGA */
   fixword       *header;
 #ifndef WITHOUT_ASCII_PTEX
-  unsigned short *chartypes;
+  unsigned int *chartypes;
 #endif /* !WITHOUT_ASCII_PTEX */
   uint32_t      *char_info;
   unsigned short *width_index;
@@ -91,6 +110,7 @@ tfm_font_init (struct tfm_font *tfm)
 #ifndef WITHOUT_OMEGA
   tfm->level   = 0;
   tfm->fontdir = 0;
+  tfm->iswide  = 0;
   tfm->nco = tfm->ncw = tfm->npc = 0;
 #endif
   tfm->char_info    = NULL;
@@ -150,6 +170,9 @@ struct coverage
 {
   int           first_char;
   int           num_chars;
+#ifndef WITHOUT_ASCII_PTEX
+  int           last_char;
+#endif
 };
 
 /*
@@ -166,7 +189,11 @@ struct range_map {
 struct char_map
 {
   struct coverage coverage;
+#ifndef WITHOUT_ASCII_PTEX
+  unsigned int *indices;
+#else
   unsigned short *indices;
+#endif
 };
 
 static void
@@ -196,8 +223,13 @@ lookup_char (const struct char_map *map, int charcode)
   if (charcode >= map->coverage.first_char &&
       charcode <= map->coverage.first_char + map->coverage.num_chars)
     return map->indices[CHARACTER_INDEX(charcode - map->coverage.first_char)];
-  else
-    return -1;
+
+#ifndef WITHOUT_ASCII_PTEX
+  if (charcode <= map->coverage.last_char)
+      return map->indices[0];
+#endif
+
+  return -1;
 }
 
 static int
@@ -211,6 +243,10 @@ lookup_range (const struct range_map *map, int charcode)
 	map->coverages[idx].first_char + map->coverages[idx].num_chars)
       return map->indices[CHARACTER_INDEX(idx)];
   }
+#ifndef WITHOUT_ASCII_PTEX
+  if (charcode <= JFM_LASTCHAR)
+      return map->indices[0];
+#endif
 
   return -1;
 }
@@ -225,6 +261,7 @@ lookup_range (const struct range_map *map, int charcode)
 
 #define FONT_DIR_HORIZ 0
 #define FONT_DIR_VERT  1
+#define FONT_DIR_RT    5
 
 struct font_metric
 {
@@ -232,7 +269,7 @@ struct font_metric
   fixword  designsize;
   char    *codingscheme;
 
-  int  fontdir;
+  int  level, fontdir, iswide;
   int firstchar, lastchar;
   
   fixword *widths;
@@ -309,13 +346,6 @@ fms_need (unsigned n)
   }
 }
 
-void
-texpdf_tfm_set_verbose (void)
-{
-  verbose++;
-}
-
-
 static int
 fread_fwords (fixword *words, int32_t nmemb, FILE *fp)
 {
@@ -390,7 +420,7 @@ tfm_check_size (struct tfm_font *tfm, off_t tfm_file_size)
 }
 
 static void
-texpdf_tfm_get_sizes (FILE *tfm_file, off_t tfm_file_size, struct tfm_font *tfm)
+tfm_get_sizes (FILE *tfm_file, off_t tfm_file_size, struct tfm_font *tfm)
 {
 #ifndef WITHOUT_ASCII_PTEX
   {
@@ -436,21 +466,35 @@ texpdf_tfm_get_sizes (FILE *tfm_file, off_t tfm_file_size, struct tfm_font *tfm)
 }
 
 #ifndef WITHOUT_ASCII_PTEX
+static unsigned int
+get_unsigned_triple_kanji(FILE *file)
+{
+  unsigned int triple = get_unsigned_byte(file);
+  triple = (triple << 8) | get_unsigned_byte(file);
+  triple = triple | (get_unsigned_byte(file)<<16);
+  return triple;
+}
+
 static void
 jfm_do_char_type_array (FILE *tfm_file, struct tfm_font *tfm)
 {
-  unsigned short charcode;
+  unsigned int charcode;
   unsigned short chartype;
-  int i;
+  unsigned int i;
 
-  tfm->chartypes = NEW(65536, unsigned short);
-  for (i = 0; i < 65536; i++) {
+  tfm->chartypes = NEW(UCS_LASTCHAR + 1, unsigned int);
+  for (i = 0; i < (UCS_LASTCHAR + 1); i++) {
     tfm->chartypes[i] = 0;
   }
   for (i = 0; i < tfm->nt; i++) {
-    charcode = get_unsigned_pair(tfm_file);
-    chartype = get_unsigned_pair(tfm_file);
-    tfm->chartypes[charcode] = chartype;
+    /* support new JFM spec by texjporg */
+    charcode = get_unsigned_triple_kanji(tfm_file);
+    chartype = get_unsigned_byte(tfm_file);
+    if (charcode < (UCS_LASTCHAR + 1))
+      tfm->chartypes[charcode] = chartype;
+    else {
+      /* Invalid charcode */
+    }
   }
 }
 
@@ -465,15 +509,16 @@ jfm_make_charmap (struct font_metric *fm, struct tfm_font *tfm)
     fm->charmap.data = map = NEW(1, struct char_map);
     map->coverage.first_char = 0;
 #ifndef WITHOUT_ASCII_PTEX
-    map->coverage.num_chars  = 0x10FFFFL;
-    map->indices    = NEW(0x10001L, unsigned short);
-    map->indices[0x10000L] = tfm->chartypes[0];
+    map->coverage.num_chars  = UCS_LASTCHAR;
+    map->coverage.last_char  = JFM_LASTCHAR;
+    map->indices    = NEW(UCS_LASTCHAR + 2, unsigned int);
+    map->indices[UCS_LASTCHAR + 1] = tfm->chartypes[0];
+    for (code = 0; code <= UCS_LASTCHAR; code++) {
 #else
     map->coverage.num_chars  = 0xFFFFL;
     map->indices    = NEW(0x10000L, unsigned short);
-#endif
-
     for (code = 0; code <= 0xFFFFU; code++) {
+#endif
       map->indices[code] = tfm->chartypes[code];
     }
   } else {
@@ -485,7 +530,8 @@ jfm_make_charmap (struct font_metric *fm, struct tfm_font *tfm)
     map->coverages     = NEW(map->num_coverages, struct coverage);
     map->coverages[0].first_char = 0;
 #ifndef WITHOUT_ASCII_PTEX
-    map->coverages[0].num_chars  = 0x10FFFFL;
+    map->coverages[0].num_chars  = UCS_LASTCHAR;
+    map->coverages[0].last_char  = JFM_LASTCHAR;
 #else
     map->coverages[0].num_chars  = 0xFFFFL;
 #endif
@@ -611,7 +657,16 @@ ofm_get_sizes (FILE *ofm_file, off_t ofm_file_size, struct tfm_font *tfm)
   tfm->nfonparm = get_positive_quad(ofm_file, "OFM", "nfonparm");
   tfm->fontdir  = get_positive_quad(ofm_file, "OFM", "fontdir");
   if (tfm->fontdir) {
-    WARN("I may be interpreting a font direction incorrectly.");
+#ifndef WITHOUT_ASCII_PTEX
+    if (dvi_ptex_with_vert && tfm->fontdir==FONT_DIR_RT && tfm->level==1 && tfm->ec>=0x2E00) {
+      /* interpret FONTDIR RT as pTeX vertical writing */
+      if (dpx_conf.verbose_level > 0)
+        WARN("I will interpret a font direction as pTeX vertical writing.");
+    } else
+#endif /* !WITHOUT_ASCII_PTEX */
+    {
+      WARN("I may be interpreting a font direction incorrectly.");
+    }
   }
   if (tfm->level == 0) {
     ofm_check_size_one(tfm, ofm_file_size);
@@ -693,6 +748,9 @@ ofm_do_char_info_one (FILE *tfm_file, struct tfm_font *tfm)
 	tfm->height_index[i+j+1] = tfm->height_index[i];
 	tfm->depth_index [i+j+1] = tfm->depth_index [i];
       }
+      if (IS_WIDE_CHAR(i) || IS_WIDE_CHAR(i+repeats)) {
+        tfm->iswide = 1;
+      }
       /* Skip ahead because we have already handled repeats */
       i += repeats;
     }
@@ -753,7 +811,9 @@ read_ofm (struct font_metric *fm, FILE *ofm_file, off_t ofm_file_size)
   tfm_unpack_header(fm, &tfm);
   fm->firstchar = tfm.bc;
   fm->lastchar  = tfm.ec;
+  fm->level     = tfm.level;
   fm->source    = SOURCE_TYPE_OFM;
+  fm->iswide    = tfm.iswide;
 
   tfm_font_clear(&tfm);
 
@@ -768,7 +828,7 @@ read_tfm (struct font_metric *fm, FILE *tfm_file, off_t tfm_file_size)
 
   tfm_font_init(&tfm);
 
-  texpdf_tfm_get_sizes(tfm_file, tfm_file_size, &tfm);
+  tfm_get_sizes(tfm_file, tfm_file_size, &tfm);
   fm->firstchar = tfm.bc;
   fm->lastchar  = tfm.ec;
   if (tfm.wlenheader > 0) {
@@ -780,7 +840,7 @@ read_tfm (struct font_metric *fm, FILE *tfm_file, off_t tfm_file_size)
     jfm_do_char_type_array(tfm_file, &tfm);
     jfm_make_charmap(fm, &tfm);
     fm->firstchar = 0;
-    fm->lastchar  = 0x10FFFFL;
+    fm->lastchar  = JFM_LASTCHAR;
     fm->fontdir   = (tfm.id == JFMV_ID) ? FONT_DIR_VERT : FONT_DIR_HORIZ;
     fm->source    = SOURCE_TYPE_JFM;
   }
@@ -809,33 +869,104 @@ read_tfm (struct font_metric *fm, FILE *tfm_file, off_t tfm_file_size)
   return;
 }
 
-/*
- * It's now the callees responsibility to call kpathsea and resolve the path.
- */
-
 int
-texpdf_tfm_open (const char *path, const char *tex_name, int must_exist)
+tfm_open (const char *tfm_name, int must_exist)
 {
   FILE *tfm_file;
   int i, format = TFM_FORMAT;
   off_t tfm_file_size;
+  char *file_name = NULL;
 
   for (i = 0; i < numfms; i++) {
-    if (!strcmp(tex_name, fms[i].tex_name))
+    if (!strcmp(tfm_name, fms[i].tex_name))
       return i;
   }
 
-  tfm_file = MFOPEN(path, FOPEN_RBIN_MODE);
-  if (!tfm_file) {
-    ERROR("Could not open specified TFM/OFM file \"%s\".", path);
+  /*
+   * The procedure to search tfm or ofm files:
+   * 1. Search tfm file with the given name with the must_exist flag unset.
+   * 2. Search ofm file with the given name with the must_exist flag unset.
+   * 3. If not found and must_exist flag is set, try again to search
+   *    tfm file with the must_exist flag set.
+   * 4. If not found and must_exist flag is not set, return -1.
+   */
+
+
+  /*
+   * We first look for OFM and then TFM.
+   * The reason for this change is incompatibility introduced when dvipdfmx
+   * started to write correct glyph metrics to output PDF for CID fonts.
+   * I'll not explain this in detail... This change is mostly specific to
+   * Japanese support.
+   */
+#if 0
+  if ((file_name = kpse_find_file(tfm_name, kpse_tfm_format, 0))) {
+    format = TFM_FORMAT;
+  } else if ((file_name = kpse_find_file(tfm_name, kpse_ofm_format, 0))) {
+    format = OFM_FORMAT;
+  }
+#endif
+ {
+   char *ofm_name, *suffix;
+
+   suffix = strrchr(tfm_name, '.');
+   if (!suffix || (strcasecmp(suffix, ".tfm") != 0 &&
+                   strcasecmp(suffix, ".ofm") != 0)) {
+     ofm_name = NEW(strlen(tfm_name) + strlen(".ofm") + 1, char);
+     strcpy(ofm_name, tfm_name);
+     strcat(ofm_name, ".ofm");
+   } else {
+     ofm_name = NULL;
+   }
+   if (ofm_name &&
+       (file_name = kpse_find_file(ofm_name, kpse_ofm_format, 0)) != NULL) {
+     format = OFM_FORMAT;
+   } else if ((file_name =
+               kpse_find_file(tfm_name, kpse_tfm_format, 0)) != NULL) {
+     format = TFM_FORMAT;
+   } else if ((file_name =
+               kpse_find_file(tfm_name, kpse_ofm_format, 0)) != NULL) {
+     suffix = strrchr(file_name, '.');
+     if (suffix && strcasecmp(suffix, ".ofm") == 0)
+       format = OFM_FORMAT;
+     else
+       format = TFM_FORMAT;
+   }
+   if (ofm_name)
+     RELEASE(ofm_name);
+ }
+
+  /*
+   * In case that must_exist is set, MiKTeX returns always non-NULL value
+   * even if the tfm file is not found.
+   */
+  if (file_name == NULL) {
+    if (must_exist) {
+      if ((file_name = kpse_find_file(tfm_name, kpse_tfm_format, 1)) != NULL)
+	format = TFM_FORMAT;
+      else {
+	ERROR("Unable to find TFM file \"%s\".", tfm_name);
+      }
+    } else {
+      return -1;
+    }
   }
 
-  if (verbose) {
-    if (format == TFM_FORMAT)
-      MESG("(TFM:%s", path);
-    else if (format == OFM_FORMAT)
-      MESG("(OFM:%s", path);
+  tfm_file = MFOPEN(file_name, FOPEN_RBIN_MODE);
+  if (!tfm_file) {
+    ERROR("Could not open specified TFM/OFM file \"%s\".", tfm_name);
   }
+
+  if (dpx_conf.verbose_level > 0) {
+    if (format == TFM_FORMAT)
+      MESG("(TFM:%s", tfm_name);
+    else if (format == OFM_FORMAT)
+      MESG("(OFM:%s", tfm_name);
+    if (dpx_conf.verbose_level > 1)
+      MESG("[%s]", file_name);
+  }
+
+  RELEASE(file_name);
 
   tfm_file_size = xfile_size (tfm_file, "TFM/OFM");
   if (tfm_file_size > 0x1ffffffff)
@@ -858,17 +989,17 @@ texpdf_tfm_open (const char *path, const char *tex_name, int must_exist)
 
   MFCLOSE(tfm_file);
 
-  fms[numfms].tex_name = NEW(strlen(tex_name)+1, char);
-  strcpy(fms[numfms].tex_name, tex_name);
+  fms[numfms].tex_name = NEW(strlen(tfm_name)+1, char);
+  strcpy(fms[numfms].tex_name, tfm_name);
 
-  if (verbose) 
+  if (dpx_conf.verbose_level > 0) 
     MESG(")");
 
   return numfms++;
 }
 
 void
-texpdf_tfm_close_all (void)
+tfm_close_all (void)
 {
   int  i;
 
@@ -886,7 +1017,7 @@ texpdf_tfm_close_all (void)
 } while (0)
 
 fixword
-texpdf_tfm_get_fw_width (int font_id, int32_t ch)
+tfm_get_fw_width (int font_id, int32_t ch)
 {
   struct font_metric *fm;
   int idx = 0;
@@ -909,6 +1040,10 @@ texpdf_tfm_get_fw_width (int font_id, int32_t ch)
     default:
       idx = ch;
     }
+#ifndef WITHOUT_ASCII_PTEX
+  } else if (ch > fm->lastchar && ch <= JFM_LASTCHAR) {
+    idx = 0;
+#endif /* !WITHOUT_ASCII_PTEX */
   } else {
     ERROR("Invalid char: %ld\n", ch);
   }
@@ -917,7 +1052,7 @@ texpdf_tfm_get_fw_width (int font_id, int32_t ch)
 }
 
 fixword
-texpdf_tfm_get_fw_height (int font_id, int32_t ch)
+tfm_get_fw_height (int font_id, int32_t ch)
 {
   struct font_metric *fm;
   int idx = 0;
@@ -940,6 +1075,10 @@ texpdf_tfm_get_fw_height (int font_id, int32_t ch)
     default:
       idx = ch;
     }
+#ifndef WITHOUT_ASCII_PTEX
+  } else if (ch > fm->lastchar && ch <= JFM_LASTCHAR) {
+    idx = 0;
+#endif /* !WITHOUT_ASCII_PTEX */
   } else {
     ERROR("Invalid char: %ld\n", ch);
   }
@@ -948,7 +1087,7 @@ texpdf_tfm_get_fw_height (int font_id, int32_t ch)
 }
 
 fixword
-texpdf_tfm_get_fw_depth (int font_id, int32_t ch)
+tfm_get_fw_depth (int font_id, int32_t ch)
 {
   struct font_metric *fm;
   int idx = 0;
@@ -971,6 +1110,10 @@ texpdf_tfm_get_fw_depth (int font_id, int32_t ch)
     default:
       idx = ch;
     }
+#ifndef WITHOUT_ASCII_PTEX
+  } else if (ch > fm->lastchar && ch <= JFM_LASTCHAR) {
+    idx = 0;
+#endif /* !WITHOUT_ASCII_PTEX */
   } else {
     ERROR("Invalid char: %ld\n", ch);
   }
@@ -980,26 +1123,26 @@ texpdf_tfm_get_fw_depth (int font_id, int32_t ch)
 
 
 /*
- * texpdf_tfm_get_width returns the width of the font
+ * tfm_get_width returns the width of the font
  * as a (double) fraction of the design size.
  */
 double
-texpdf_tfm_get_width (int font_id, int32_t ch)
+tfm_get_width (int font_id, int32_t ch)
 {
-  return ((double) texpdf_tfm_get_fw_width(font_id, ch)/FWBASE);
+  return ((double) tfm_get_fw_width(font_id, ch)/FWBASE);
 }
 
 #if 0
 double
-texpdf_tfm_get_height (int font_id, int32_t ch)
+tfm_get_height (int font_id, int32_t ch)
 {
-  return ((double) texpdf_tfm_get_fw_height(font_id, ch)/FWBASE);
+  return ((double) tfm_get_fw_height(font_id, ch)/FWBASE);
 }
 
 double
-texpdf_tfm_get_depth (int font_id, Sint32_t ch)
+tfm_get_depth (int font_id, Sint32_t ch)
 {
-  return ((double) texpdf_tfm_get_fw_depth(font_id, ch)/FWBASE);
+  return ((double) tfm_get_fw_depth(font_id, ch)/FWBASE);
 }
 #endif
 
@@ -1020,17 +1163,18 @@ tfm_string_width (int font_id, const unsigned char *s, unsigned len)
       int32_t ch;
 
       ch = (s[2*i] << 8)|s[2*i+1];
-      result += texpdf_tfm_get_fw_width(font_id, ch);
+      result += tfm_get_fw_width(font_id, ch);
     }
   } else
 #endif
     for (i = 0; i < len; i++) {
-      result += texpdf_tfm_get_fw_width(font_id, s[i]);
+      result += tfm_get_fw_width(font_id, s[i]);
     }
 
   return result;
 }
 
+#if 0
 fixword
 tfm_string_depth (int font_id, const unsigned char *s, unsigned len)
 {
@@ -1047,12 +1191,12 @@ tfm_string_depth (int font_id, const unsigned char *s, unsigned len)
       int32_t ch;
 
       ch = (s[2*i] << 8)|s[2*i+1];
-      result += texpdf_tfm_get_fw_depth(font_id, ch);
+      result += tfm_get_fw_depth(font_id, ch);
     }
   } else
 #endif
     for (i = 0; i < len; i++) {
-      result = MAX(result, texpdf_tfm_get_fw_depth(font_id, s[i]));
+      result = MAX(result, tfm_get_fw_depth(font_id, s[i]));
     }
 
   return result;
@@ -1074,19 +1218,20 @@ tfm_string_height (int font_id, const unsigned char *s, unsigned len)
       int32_t ch;
 
       ch = (s[2*i] << 8)|s[2*i+1];
-      result += texpdf_tfm_get_fw_height(font_id, ch);
+      result += tfm_get_fw_height(font_id, ch);
     }
   } else
 #endif
     for (i = 0; i < len; i++) {
-      result = MAX(result, texpdf_tfm_get_fw_height(font_id, s[i]));
+      result = MAX(result, tfm_get_fw_height(font_id, s[i]));
     }
 
   return result;
 }
+#endif
 
 double
-texpdf_tfm_get_design_size (int font_id)
+tfm_get_design_size (int font_id)
 {
   CHECK_ID(font_id);
 
@@ -1095,7 +1240,7 @@ texpdf_tfm_get_design_size (int font_id)
 
 #if 0
 char *
-texpdf_tfm_get_codingscheme (int font_id)
+tfm_get_codingscheme (int font_id)
 {
   CHECK_ID(font_id);
 
@@ -1119,3 +1264,46 @@ tfm_is_vert (int font_id)
 }
 #endif /* !WITHOUT_ASCII_PTEX */
 #endif
+
+#ifndef WITHOUT_ASCII_PTEX
+int
+tfm_is_jfm (int font_id)
+{
+  int is_jfm = 0;
+
+  CHECK_ID(font_id);
+
+  if (fms[font_id].source == SOURCE_TYPE_JFM) is_jfm = 1;
+#ifndef WITHOUT_OMEGA
+  if (fms[font_id].source == SOURCE_TYPE_OFM
+      && fms[font_id].level == 1 && fms[font_id].iswide == 1) is_jfm = 2;
+#endif
+
+  return is_jfm;
+}
+#else /* WITHOUT_ASCII_PTEX */
+int
+tfm_is_jfm (int font_id)
+{
+  return 0;
+}
+#endif /* !WITHOUT_ASCII_PTEX */
+
+int
+tfm_exists (const char *tfm_name)
+{
+  char *fullname;
+
+  fullname = kpse_find_file(tfm_name, kpse_ofm_format, 0);
+  if (fullname) {
+    RELEASE(fullname);
+    return 1;
+  }
+  fullname = kpse_find_file(tfm_name, kpse_tfm_format, 0);
+  if (fullname) {
+    RELEASE(fullname);
+    return 1;
+  }
+
+  return 0;
+}

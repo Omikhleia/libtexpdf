@@ -1,8 +1,10 @@
 /* This is dvipdfmx, an eXtended version of dvipdfm by Mark A. Wicks.
 
-    Copyright (C) 2002-2014 by Jin-Hwan Cho and Shunsaku Hirata,
+    Copyright (C) 2002-2020 by Jin-Hwan Cho and Shunsaku Hirata,
     the dvipdfmx project team.
     
+    Copyright (C) 2014-2025 by The SILE Typesetter (as libtexpdf).
+
     This program is free software; you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
     the Free Software Foundation; either version 2 of the License, or
@@ -45,8 +47,19 @@
  */
 
 #include "libtexpdf.h"
+
 #include <stdio.h>
+
+/* fabs, sqrt ... */
 #include <math.h>
+
+#include "error.h"
+
+/* data types, limits */
+#include "cff_types.h"
+#include "cff_limits.h"
+
+#include "cs_type2.h"
 
 #define CS_TYPE2_DEBUG_STR "Type2 Charstring Parser"
 #define CS_TYPE2_DEBUG     5
@@ -188,10 +201,10 @@ clear_stack (card8 **dest, card8 *limit)
 
   for (i = 0; i < stack_top; i++) {
     double value;
-    long   ivalue;
+    int    ivalue;
     value  = arg_stack[i];
     /* Nearest integer value */
-    ivalue = (long) floor(value+0.5);
+    ivalue = (int) floor(value+0.5);
     if (value >= 0x8000L || value <= (-0x8000L - 1)) {
       /*
        * This number cannot be represented as a single operand.
@@ -202,10 +215,10 @@ clear_stack (card8 **dest, card8 *limit)
       /* 16.16-bit signed fixed value  */
       DST_NEED(limit, *dest + 5);
       *(*dest)++ = 255;
-      ivalue = (long) floor(value); /* mantissa */
+      ivalue = (int) floor(value); /* mantissa */
       *(*dest)++ = (ivalue >> 8) & 0xff;
       *(*dest)++ = ivalue & 0xff;
-      ivalue = (long)((value - ivalue) * 0x10000l); /* fraction */
+      ivalue = (int)((value - ivalue) * 0x10000l); /* fraction */
       *(*dest)++ = (ivalue >> 8) & 0xff;
       *(*dest)++ = ivalue & 0xff;
       /* Everything else are integers. */
@@ -580,7 +593,7 @@ do_operator2 (card8 **dest, card8 *limit, card8 **data, card8 *endptr)
 static void
 get_integer (card8 **data, card8 *endptr)
 {
-  long result = 0;
+  int result = 0;
   card8 b0 = **data, b1, b2;
 
   *data += 1;
@@ -622,7 +635,7 @@ get_integer (card8 **data, card8 *endptr)
 static void
 get_fixed (card8 **data, card8 *endptr)
 {
-  long ivalue;
+  int ivalue;
   double rvalue;
 
   *data += 1;
@@ -651,7 +664,7 @@ get_fixed (card8 **data, card8 *endptr)
  * id:       biased subroutine number.
  */
 static void
-get_subr (card8 **subr, long *len, cff_index *subr_idx, long id)
+get_subr (card8 **subr, int *len, cff_index *subr_idx, int id)
 {
   card16 count;
 
@@ -691,7 +704,7 @@ do_charstring (card8 **dest, card8 *limit,
 	       cff_index *gsubr_idx, cff_index *subr_idx)
 {
   card8 b0 = 0, *subr;
-  long  len;
+  int   len;
 
   if (nest > CS_SUBR_NEST_MAX)
     ERROR("%s: Subroutine nested too deeply.", CS_TYPE2_DEBUG_STR);
@@ -709,7 +722,7 @@ do_charstring (card8 **dest, card8 *limit,
 	status = CS_STACK_ERROR;
       } else {
 	stack_top--;
-	get_subr(&subr, &len, gsubr_idx, (long) arg_stack[stack_top]);
+	get_subr(&subr, &len, gsubr_idx, (int) arg_stack[stack_top]);
 	if (*dest + len > limit)
 	  ERROR("%s: Possible buffer overflow.", CS_TYPE2_DEBUG_STR);
 	do_charstring(dest, limit, &subr, subr + len,
@@ -721,7 +734,7 @@ do_charstring (card8 **dest, card8 *limit,
 	status = CS_STACK_ERROR;
       } else {
 	stack_top--;
-	get_subr(&subr, &len, subr_idx, (long) arg_stack[stack_top]);
+	get_subr(&subr, &len, subr_idx, (int) arg_stack[stack_top]);
 	if (limit < *dest + len)
 	  ERROR("%s: Possible buffer overflow.", CS_TYPE2_DEBUG_STR);
 	do_charstring(dest, limit, &subr, subr + len,
@@ -766,9 +779,9 @@ cs_parse_init (void)
 /*
  * Not just copying...
  */
-long
-cs_copy_charstring (card8 *dst, long dstlen,
-		    card8 *src, long srclen,
+int
+cs_copy_charstring (card8 *dst, int dstlen,
+		    card8 *src, int srclen,
 		    cff_index *gsubr, cff_index *subr,
 		    double default_width, double nominal_width, cs_ginfo *ginfo)
 {
@@ -791,5 +804,5 @@ cs_copy_charstring (card8 *dst, long dstlen,
     }
   }
 
-  return (long)(dst - save);
+  return (int)(dst - save);
 }

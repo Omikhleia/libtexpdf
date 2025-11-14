@@ -1,9 +1,11 @@
 /* This is dvipdfmx, an eXtended version of dvipdfm by Mark A. Wicks.
 
-    Copyright (C) 2002-2014 by Jin-Hwan Cho and Shunsaku Hirata,
+    Copyright (C) 2002-2020 by Jin-Hwan Cho and Shunsaku Hirata,
     the dvipdfmx project team.
 
     Copyright (C) 1998, 1999 by Mark A. Wicks <mwicks@kettering.edu>
+
+    Copyright (C) 2014-2025 by The SILE Typesetter (as libtexpdf).
 
     This program is free software; you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -25,7 +27,7 @@
 
 #include   "pdffont.h"
 
-extern int  pdf_font_open_type1c (pdf_font *font);
+extern int  pdf_font_open_type1c (pdf_font *font, const char *ident, int index, int encoding_id, int embedding);
 extern int  pdf_font_load_type1c (pdf_font *font);
 
 #endif /* _TYPE1C_H_ */

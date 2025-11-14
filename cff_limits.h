@@ -1,8 +1,10 @@
 /* This is dvipdfmx, an eXtended version of dvipdfm by Mark A. Wicks.
 
-    Copyright (C) 2002-2014 by Jin-Hwan Cho and Shunsaku Hirata,
+    Copyright (C) 2002-2020 by Jin-Hwan Cho and Shunsaku Hirata,
     the dvipdfmx project team.
     
+    Copyright (C) 2014-2025 by The SILE Typesetter (as libtexpdf).
+
     This program is free software; you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
     the Free Software Foundation; either version 2 of the License, or
@@ -26,7 +28,7 @@
 #define CFF_INT_MAX 0x7fffffff
 #define CFF_INT_MIN (-0x7fffffff - 1)
 
-#if (LONG_MAX < CFF_INT_MAX || LONG_MIN > CFF_INT_MIN)
+#if (INT_MAX < CFF_INT_MAX || INT_MIN > CFF_INT_MIN)
 #error "CFF support won't work on this system."
 #endif
 

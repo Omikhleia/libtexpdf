@@ -1,8 +1,10 @@
 /* This is dvipdfmx, an eXtended version of dvipdfm by Mark A. Wicks.
 
-    Copyright (C) 2002-2014 by Jin-Hwan Cho and Shunsaku Hirata,
+    Copyright (C) 2002-2020 by Jin-Hwan Cho and Shunsaku Hirata,
     the dvipdfmx project team.
     
+    Copyright (C) 2014-2025 by The SILE Typesetter (as libtexpdf).
+
     This program is free software; you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
     the Free Software Foundation; either version 2 of the License, or
@@ -25,21 +27,21 @@
 #include "numbers.h"
 #include "pdfobj.h"
 
-/* Acoid conflict with CHAR from <winnt.h>.  */
+/* Acoid conflict with CHAR ... from <winnt.h>.  */
 #define CHAR SFNT_CHAR
+#define ULONG SFNT_ULONG
+#define LONG SFNT_LONG
 
 /* Data Types as described in Apple's TTRefMan */
 typedef unsigned char  BYTE;
 typedef signed char    CHAR;
 typedef unsigned short USHORT;
 typedef signed short   SHORT;
-typedef unsigned long  ULONG;
-typedef signed long    LONG;
-typedef unsigned long  Fixed;   /* 16.16-bit signed fixed-point number */
+typedef uint32_t       ULONG;
+typedef int32_t        LONG;
+typedef uint32_t       Fixed;   /* 16.16-bit signed fixed-point number */
 typedef short          FWord;
 typedef unsigned short uFWord;
-typedef short          F2Dot14; /* 16-bit signed fixed number with the low
-				   14 bits representing fraction. */
 
 struct sfnt_table
 {
@@ -91,6 +93,8 @@ typedef struct
 #define sfnt_get_short(s)  ((SHORT)  get_signed_pair  ((s)->stream))
 #define sfnt_get_ulong(s)  ((ULONG)  get_unsigned_quad((s)->stream))
 #define sfnt_get_long(s)   ((LONG)   get_signed_quad  ((s)->stream))
+
+#define sfnt_get_uint24(s) ((ULONG)  get_unsigned_triple((s)->stream))
 
 #define sfnt_seek_set(s,o)   seek_absolute((s)->stream, (o))
 #define sfnt_read(b,l,s)     fread((b), 1, (l), (s)->stream)

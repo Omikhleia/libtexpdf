@@ -1,8 +1,10 @@
 /* This is dvipdfmx, an eXtended version of dvipdfm by Mark A. Wicks.
 
-    Copyright (C) 2007-2014 by Jin-Hwan Cho and Shunsaku Hirata,
+    Copyright (C) 2002-2020 by Jin-Hwan Cho and Shunsaku Hirata,
     the dvipdfmx project team.
     
+    Copyright (C) 2014-2025 by The SILE Typesetter (as libtexpdf).
+
     This program is free software; you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
     the Free Software Foundation; either version 2 of the License, or
@@ -20,33 +22,56 @@
 
 #include "libtexpdf.h"
 
+#include "system.h"
+
+#include "numbers.h"
+#include "error.h"
+#include "mem.h"
+
+#include "dpxconf.h"
+#include "dpxfile.h"
+#include "dpxutil.h"
+
+#include "pdfobj.h"
+#include "pdfresource.h"
+#include "pdffont.h"
+
+#include "pdfencoding.h"
+#include "unicode.h"
+#include "agl.h"
+
+/* TrueType */
+#include "sfnt.h"
+#include "tt_cmap.h"
+#include "tt_table.h"
+#include "tt_glyf.h"
+#include "tt_post.h"
+#include "tt_gsub.h"
+#include "tt_aux.h"
+
+#include "truetype.h"
+
 /* Modifying this has no effect :P */
 #ifdef ENABLE_NOEMBED
 #  undef ENABLE_NOEMBED
 #endif
 
 int
-pdf_font_open_truetype (pdf_font *font)
+pdf_font_open_truetype (pdf_font *font, const char *ident, int index, int encoding_id, int embedding)
 {
-  char     *ident;
-  int       index, encoding_id;
   pdf_obj  *fontdict, *descriptor;
   sfnt     *sfont;
-  int       embedding = 1; /* Must be embedded. */
   FILE     *fp = NULL;
   int       length, error = 0;
 
-  ASSERT( font );
-
-  ident = pdf_font_get_ident(font);
-  index = pdf_font_get_index(font);
-
-  ASSERT( ident );
+  ASSERT(font);
+  ASSERT(ident);
 
   fp = DPXFOPEN(ident, DPX_RES_TYPE_TTFONT);
   if (!fp) {
     fp = DPXFOPEN(ident, DPX_RES_TYPE_DFONT);
-    if (!fp) return  -1;
+    if (!fp)
+      return  -1;
     sfont = dfont_open(fp, index);
   } else {
     sfont = sfnt_open(fp);
@@ -60,14 +85,18 @@ pdf_font_open_truetype (pdf_font *font)
   }
 
   if (sfont->type == SFNT_TYPE_TTC) {
-    unsigned long offset;
+    ULONG offset;
+    
     offset = ttc_read_offset(sfont, index);
-    if (offset == 0) ERROR("Invalid TTC index in %s.", ident);
-    error = sfnt_read_table_directory(sfont, offset);
+    if (offset == 0) {
+      WARN("Invalid TTC index in %s.", ident);
+      error = -1;
+    } else {
+      error = sfnt_read_table_directory(sfont, offset);
+    }
   } else {
     error = sfnt_read_table_directory(sfont, sfont->offset);
   }
-
   if (error) {
     sfnt_close(sfont);
     if (fp)
@@ -78,25 +107,28 @@ pdf_font_open_truetype (pdf_font *font)
   /* Reading fontdict before checking fonttype conflicts with PKFONT
    * because pdf_font_get_resource() always makes a dictionary.
    */
-  encoding_id = pdf_font_get_encoding(font);
-  fontdict    = pdf_font_get_resource(font);
-  descriptor  = pdf_font_get_descriptor(font);
-#ifdef  ENABLE_NOEMBED
-  embedding   = pdf_font_get_flag(font, PDF_FONT_FLAG_NOEMBED) ? 0 : 1;
+  fontdict   = pdf_font_get_resource(font);
+  descriptor = pdf_font_get_descriptor(font);
+#ifndef  ENABLE_NOEMBED
+  if (!embedding) {
+    WARN("No-embed option not supported for TrueType font: %s", ident);
+    embedding = 1;
+    font->flags &= ~PDF_FONT_FLAG_NOEMBED;
+  }
 #endif /* ENABLE_NOEMBED */
 
   ASSERT( fontdict && descriptor );
 
   {
-    char  fontname[256];
-    int   n;
-    pdf_obj  *tmp;
+    char     fontname[256];
+    int      n;
+    pdf_obj *tmp;
 
     memset(fontname, 0, 256);
     length = tt_get_ps_fontname(sfont, fontname, 255);
     if (length < 1) {
       length = MIN(strlen(ident), 255);
-      strncpy(fontname, ident, length);
+      memcpy(fontname, ident, length);
     }
     fontname[length] = '\0';
     for (n = 0; n < length; n++) {
@@ -104,30 +136,38 @@ pdf_font_open_truetype (pdf_font *font)
         memmove(fontname + n, fontname + n + 1, length - n - 1);
       }
     }
-    if (strlen(fontname) == 0)
-      ERROR("Can't find valid fontname for \"%s\".", ident);
-    pdf_font_set_fontname(font, fontname);
-
-    tmp  = tt_get_fontdesc(sfont, &embedding, -1, 1, fontname);
-    if (!tmp) {
-      ERROR("Could not obtain necessary font info.");
-      sfnt_close(sfont);
-      if (fp)
-        DPXFCLOSE(fp);
-      return  -1;
+    if (strlen(fontname) == 0) {
+      WARN("Can't find valid fontname for \"%s\".", ident);
+      error = -1;
+    } else {
+      font->fontname = NEW(strlen(fontname)+1, char);
+      strcpy(font->fontname, fontname);
+      tmp = tt_get_fontdesc(sfont, &embedding, -1, 1, fontname);
+      if (!tmp) {
+        WARN("Could not obtain necessary font info: %s", ident);
+        error = -1;
+      } else {
+        ASSERT(texpdf_obj_typeof(tmp) == PDF_DICT);
+        texpdf_merge_dict(descriptor, tmp);
+        texpdf_release_obj(tmp);
+      }
     }
-    ASSERT(texpdf_obj_typeof(tmp) == PDF_DICT);
-
-    texpdf_merge_dict(descriptor, tmp);
-    texpdf_release_obj(tmp);
+  }
+  if (error) {
+    sfnt_close(sfont);
+    if (fp)
+      DPXFCLOSE(fp);
+    return  -1;
   }
 
   if (!embedding) {
-    if (encoding_id >= 0 &&
-        !pdf_encoding_is_predefined(encoding_id)) {
-      ERROR("Custom encoding not allowed for non-embedded TrueType font.");
-      sfnt_close(sfont);
-      return -1;
+#ifndef ENABLE_NOEMBED
+    WARN("Font file=\"%s\" can't be embedded due to liscence restrictions.", ident);
+    error = -1;
+#else
+    if (encoding_id >= 0 && !pdf_encoding_is_predefined(encoding_id)) {
+      WARN("Custom encoding not allowed for non-embedded TrueType font: %s", ident);
+      error = -1;
     } else {
       /* There are basically no guarantee for font substitution
        * can work with "symblic" fonts. At least all glyphs
@@ -137,33 +177,34 @@ pdf_font_open_truetype (pdf_font *font)
        * only to predefined encodings for this reason. Note that
        * "builtin" encoding means "MacRoman" here.
        */
-      pdf_obj  *tmp;
-      long      flags;
+      pdf_obj *tmp;
+      int      flags;
 
-#ifndef  ENABLE_NOEMBED
-      ERROR("Font file=\"%s\" can't be embedded due to liscence restrictions.", ident);
-#endif /* ENABLE_NOEMBED */
-      pdf_font_set_flags(font, PDF_FONT_FLAG_NOEMBED);
+      font->flags |= PDF_FONT_FLAG_NOEMBED;
       tmp = texpdf_lookup_dict(descriptor, "Flags");
       if (tmp && texpdf_obj_typeof(tmp) == PDF_NUMBER) {
-        flags  = (long) texpdf_number_value(tmp);
+        flags  = (int) texpdf_number_value(tmp);
         flags &= (1 << 2); /* clear Symbolic */
         flags |= (1 << 5); /* set Nonsymbolic */
         texpdf_add_dict(descriptor, texpdf_new_name("Flags"), texpdf_new_number(flags));
       }
     }
+#endif /* ENABLE_NOEMBED */
   }
 
   sfnt_close(sfont);
   if (fp)
     DPXFCLOSE(fp);
 
-  texpdf_add_dict(fontdict,
-               texpdf_new_name("Type"),    texpdf_new_name("Font"));
-  texpdf_add_dict(fontdict,
-               texpdf_new_name("Subtype"), texpdf_new_name("TrueType"));
+  if (!error) {
+    texpdf_add_dict(fontdict,
+                texpdf_new_name("Type"),    texpdf_new_name("Font"));
+    texpdf_add_dict(fontdict,
+                texpdf_new_name("Subtype"), texpdf_new_name("TrueType"));
+    font->subtype = PDF_FONT_FONTTYPE_TRUETYPE;
+  }
 
-  return  0;
+  return error;
 }
 
 /*
@@ -193,15 +234,13 @@ static void
 do_widths (pdf_font *font, double *widths)
 {
   pdf_obj  *fontdict;
-  pdf_obj  *tmparray;
+  pdf_obj  *array;
   int       code, firstchar, lastchar;
-  int tfm_id;
   char     *usedchars;
 
-  fontdict   = pdf_font_get_resource  (font);
-  usedchars  = pdf_font_get_usedchars (font);
+  fontdict   = font->resource;
+  usedchars  = font->usedchars;
 
-  tmparray = texpdf_new_array();
   for (firstchar = 255, lastchar = 0, code = 0; code < 256; code++) {
     if (usedchars[code]) {
       if (code < firstchar) firstchar = code;
@@ -210,29 +249,23 @@ do_widths (pdf_font *font, double *widths)
   }
   if (firstchar > lastchar) {
     WARN("No glyphs actually used???");
-    texpdf_release_obj(tmparray);
     return;
   }
-  tfm_id = texpdf_tfm_open(pdf_font_get_tfm_path(font), pdf_font_get_mapname(font), 0);
+
+  pdf_check_tfm_widths(font->ident, widths, firstchar, lastchar, usedchars);
+
+  array = texpdf_new_array();
   for (code = firstchar; code <= lastchar; code++) {
     if (usedchars[code]) {
-      double width;
-      if (tfm_id < 0) /* tfm is not found */      
-        width = widths[code];
-      else
-        width = 1000. * texpdf_tfm_get_width(tfm_id, code);
-      texpdf_add_array(tmparray,
-                    texpdf_new_number(ROUND(width, 0.1)));
+      texpdf_add_array(array, texpdf_new_number(ROUND(widths[code], 0.1)));
     } else {
-      texpdf_add_array(tmparray, texpdf_new_number(0.0));
+      texpdf_add_array(array, texpdf_new_number(0.0));
     }
   }
-
-  if (texpdf_array_length(tmparray) > 0) {
-    texpdf_add_dict(fontdict,
-                 texpdf_new_name("Widths"), texpdf_ref_obj(tmparray));
+  if (texpdf_array_length(array) > 0) {
+    texpdf_add_dict(fontdict, texpdf_new_name("Widths"), texpdf_ref_obj(array));
   }
-  texpdf_release_obj(tmparray);
+  texpdf_release_obj(array);
 
   texpdf_add_dict(fontdict,
                texpdf_new_name("FirstChar"), texpdf_new_number(firstchar));
@@ -241,8 +274,6 @@ do_widths (pdf_font *font, double *widths)
 
   return;
 }
-
-static int verbose = 0;
 
 #define PDFUNIT(v) ((double) (ROUND(1000.0*(v)/(glyphs->emsize), 1)))
 
@@ -263,6 +294,8 @@ do_builtin_encoding (pdf_font *font, const char *usedchars, sfnt *sfont)
   USHORT            gid, idx;
   int               code, count;
   double            widths[256];
+  USHORT            code_to_idx[256] = {0};
+  int               cmap_old_format = 0;
 
   ttcm = tt_cmap_read(sfont, TT_MAC, TT_MAC_ROMAN);
   if (!ttcm) {
@@ -270,20 +303,56 @@ do_builtin_encoding (pdf_font *font, const char *usedchars, sfnt *sfont)
     return  -1;
   }
 
-  cmap_table = NEW(274, char);
-  memset(cmap_table, 0, 274);
-  sfnt_put_ushort(cmap_table,    0);            /* Version  */
-  sfnt_put_ushort(cmap_table+2,  1);            /* Number of subtables */
-  sfnt_put_ushort(cmap_table+4,  TT_MAC);       /* Platform ID */
-  sfnt_put_ushort(cmap_table+6,  TT_MAC_ROMAN); /* Encoding ID */
-  sfnt_put_ulong (cmap_table+8,  12);           /* Offset   */
-  sfnt_put_ushort(cmap_table+12, 0);            /* Format   */
-  sfnt_put_ushort(cmap_table+14, 262);          /* Length   */
-  sfnt_put_ushort(cmap_table+16, 0);            /* Language */
+  if (cmap_old_format) {
+    cmap_table = NEW(274, char);
+    memset(cmap_table, 0, 274);
+    sfnt_put_ushort(cmap_table,    0);            /* Version  */
+    sfnt_put_ushort(cmap_table+2,  1);            /* Number of subtables */
+    sfnt_put_ushort(cmap_table+4,  TT_MAC);       /* Platform ID */
+    sfnt_put_ushort(cmap_table+6,  TT_MAC_ROMAN); /* Encoding ID */
+    sfnt_put_ulong (cmap_table+8,  12);           /* Offset   */
+    sfnt_put_ushort(cmap_table+12, 0);            /* Format   */
+    sfnt_put_ushort(cmap_table+14, 262);          /* Length   */
+    sfnt_put_ushort(cmap_table+16, 0);            /* Language */
+  } else {
+    cmap_table = NEW(1086, char); /* = 20 + 522 + 544 */
+    memset(cmap_table, 0, 1086);
+    sfnt_put_ushort(cmap_table,    0);            /* Version  */
+    sfnt_put_ushort(cmap_table+2,  2);            /* Number of subtables */
+    sfnt_put_ushort(cmap_table+4,  TT_MAC);       /* Platform ID */
+    sfnt_put_ushort(cmap_table+6,  TT_MAC_ROMAN); /* Encoding ID */
+    sfnt_put_ulong (cmap_table+8,  20);           /* Offset   */
+    sfnt_put_ushort(cmap_table+12, TT_WIN);       /* Platform ID */
+    sfnt_put_ushort(cmap_table+14, TT_WIN_SYMBOL);/* Encoding ID */
+    sfnt_put_ulong (cmap_table+16, 542);          /* Offset   = 20 + 522 */
+    /* (1, 0) subtable */
+    sfnt_put_ushort(cmap_table+20, 6);            /* format   */
+    sfnt_put_ushort(cmap_table+22, 522);          /* length   = 10 + 512 */
+    sfnt_put_ushort(cmap_table+24, 0);            /* language */
+    sfnt_put_ushort(cmap_table+26, 0);            /* firstCode */
+    sfnt_put_ushort(cmap_table+28, 256);          /* entryCount */
+    /* (3, 0) subtable */
+    sfnt_put_ushort(cmap_table+542, 4);           /* format   */
+    sfnt_put_ushort(cmap_table+544, 544);         /* length   = 16 + 8 * 2 + 512 */
+    sfnt_put_ushort(cmap_table+546, 0);           /* language */
+    sfnt_put_ushort(cmap_table+548, 4);           /* segCountX2 */
+    sfnt_put_ushort(cmap_table+550, 4);           /* searchRange */
+    sfnt_put_ushort(cmap_table+552, 1);           /* entrySelector */
+    sfnt_put_ushort(cmap_table+554, 0);           /* rangeShift */
+    sfnt_put_ushort(cmap_table+556, 0xf0ff)       /* endCode[0] */
+    sfnt_put_ushort(cmap_table+558, 0xffff)       /* endCode[1] */
+    sfnt_put_ushort(cmap_table+560, 0);           /* reservedPad */
+    sfnt_put_ushort(cmap_table+562, 0xf000);      /* startCode[0] */
+    sfnt_put_ushort(cmap_table+564, 0xffff);      /* startCode[1] */
+    sfnt_put_short (cmap_table+566, 0);           /* idDelta[0] */
+    sfnt_put_short (cmap_table+568, 1);           /* idDelta[1] */
+    sfnt_put_ushort(cmap_table+570, 4);           /* idRangeOffset[0] */
+    sfnt_put_ushort(cmap_table+572, 0);           /* idRangeOffset[1] */
+  }
 
   glyphs = tt_build_init();
 
-  if (verbose > 2)
+  if (dpx_conf.verbose_level > 2)
     MESG("[glyphs:/.notdef");
 
   count = 1; /* .notdef */
@@ -291,25 +360,37 @@ do_builtin_encoding (pdf_font *font, const char *usedchars, sfnt *sfont)
     if (!usedchars[code])
       continue;
 
-    if (verbose > 2)
+    if (dpx_conf.verbose_level > 2)
       MESG("/.c0x%02x", code);
 
     gid = tt_cmap_lookup(ttcm, code);
     if (gid == 0) {
       WARN("Glyph for character code=0x%02x missing in font font-file=\"%s\".",
-           code, pdf_font_get_ident(font));
+           code, font->filename);
       idx = 0;
     } else {
       idx = tt_find_glyph(glyphs, gid);
       if (idx == 0)
         idx  = tt_add_glyph(glyphs, (USHORT)gid, (USHORT)count); /* count returned. */
     }
-    cmap_table[18+code] = idx & 0xff; /* bug here */
+    code_to_idx[code] = idx;
+    if (cmap_old_format) {
+      if (idx >= 256) {
+        WARN("Font font-file=\"%s\" uses more than 255 glyphs", font->filename);
+        WARN(">> Glyph for character code=0x%02x will be inaccessible.", code);
+        cmap_table[18 + code] = 0;
+      } else {
+        cmap_table[18 + code] = (char)(BYTE)idx;
+      }
+    } else {
+      sfnt_put_ushort(cmap_table +  30 + 2 * code, idx);
+      sfnt_put_ushort(cmap_table + 574 + 2 * code, idx);
+    }
     count++;
   }
   tt_cmap_release(ttcm);
 
-  if (verbose > 2)
+  if (dpx_conf.verbose_level > 2)
     MESG("]");
 
   if (tt_build_tables(sfont, glyphs) < 0) {
@@ -321,7 +402,7 @@ do_builtin_encoding (pdf_font *font, const char *usedchars, sfnt *sfont)
 
   for (code = 0; code < 256; code++) {
     if (usedchars[code]) {
-      idx = tt_get_index(glyphs, (USHORT) cmap_table[18+code]);
+      idx = tt_get_index(glyphs, code_to_idx[code]);
       widths[code] = PDFUNIT(glyphs->gd[idx].advw);
     } else {
       widths[code] = 0.0;
@@ -329,12 +410,16 @@ do_builtin_encoding (pdf_font *font, const char *usedchars, sfnt *sfont)
   }
   do_widths(font, widths);
 
-  if (verbose > 1) 
+  if (dpx_conf.verbose_level > 1) 
     MESG("[%d glyphs]", glyphs->num_glyphs);
 
   tt_build_finish(glyphs);
 
-  sfnt_set_table(sfont, "cmap", cmap_table, 274);
+  if (cmap_old_format) {
+    sfnt_set_table(sfont, "cmap", cmap_table,  274);
+  } else {
+    sfnt_set_table(sfont, "cmap", cmap_table, 1086);
+  }
 
   return  0;
 }
@@ -393,7 +478,7 @@ select_gsub (const char *feat, struct glyph_mapper *gm)
   if (idx >= 0)
     return  0;
 
-  if (verbose > 1)
+  if (dpx_conf.verbose_level > 1)
     MESG("\ntrutype>> Try loading OTL GSUB for \"*.*.%s\"...", feat);
   error = otl_gsub_add_feat(gm->gsub, "*", "*", feat, gm->sfont);
   if (!error) {
@@ -500,7 +585,7 @@ composeglyph (USHORT *glyphs, int n_glyphs,
 
 /* This may be called by findparanoiac(). */
 static int
-composeuchar (long *unicodes, int n_unicodes,
+composeuchar (int32_t *unicodes, int n_unicodes,
               const char *feat, struct glyph_mapper *gm, USHORT *gid)
 {
   USHORT  *gids;
@@ -533,7 +618,7 @@ findposttable (const char *glyph_name, USHORT *gid, struct glyph_mapper *gm)
 
   *gid = tt_lookup_post_table(gm->nametogid, glyph_name);
 #if  0
-  if (verbose > 1)
+  if (dpx_conf.verbose_level > 1)
   {
     if (*gid > 0)
       MESG("%s =post=> 0x%04X\n", glyph_name, *gid);
@@ -617,11 +702,11 @@ findparanoiac (const char *glyphname, USHORT *gid, struct glyph_mapper *gm)
       if (agln->n_components == 1)
         idx = tt_cmap_lookup(gm->codetogid, agln->unicodes[0]);
       else if (agln->n_components > 1) {
-        if (verbose >= 0) /* give warning */
+        if (dpx_conf.verbose_level >= 0) /* give warning */
           WARN("Glyph \"%s\" looks like a composite glyph...",
                agln->name);
         error = composeuchar(agln->unicodes, agln->n_components, NULL, gm, &idx);
-        if (verbose >= 0) {
+        if (dpx_conf.verbose_level >= 0) {
           if (error)
             WARN("Not found...");
           else {
@@ -632,9 +717,9 @@ findparanoiac (const char *glyphname, USHORT *gid, struct glyph_mapper *gm)
             for (_p = _buf, _i = 0; _i < agln->n_components && _n < 245; _i++) {
               _p[_n++] = _i == 0 ? '<' : ' ';
               if (agln->unicodes[_i] >= 0x10000)
-                _n += sprintf(_p+_n, "U+%06lX", agln->unicodes[_i]);
+                _n += sprintf(_p+_n, "U+%06X", agln->unicodes[_i]);
               else
-                _n += sprintf(_p+_n, "U+%04lX", agln->unicodes[_i]);
+                _n += sprintf(_p+_n, "U+%04X", agln->unicodes[_i]);
               _p[_n++] = _i == agln->n_components - 1 ? '>' : ',';
             }
             _p[_n++] = '\0';
@@ -655,7 +740,7 @@ resolve_glyph (const char *glyphname, USHORT *gid, struct glyph_mapper *gm)
 {
   int    error = 0;
   char  *name, *suffix = NULL;
-  long   ucv;
+  int32_t ucv;
 
   ASSERT(glyphname);
 
@@ -749,28 +834,65 @@ do_custom_encoding (pdf_font *font,
   double                 widths[256];
   struct glyph_mapper    gm;
   USHORT                 idx, gid;
+  USHORT                 code_to_idx[256] = {0};
   int                    error = 0;
+  int                    cmap_old_format = 0;
 
   ASSERT(font && encoding && usedchars && sfont);
 
   error = setup_glyph_mapper(&gm, sfont);
   if (error) {
-    WARN("No post table nor Unicode cmap found in font: %s",
-         pdf_font_get_ident(font));
+    WARN("No post table nor Unicode cmap found in font: %s", font->filename);
     WARN(">> I can't find glyphs without this!");
     return  -1;
   }
 
-  cmap_table = NEW(274, char);
-  memset(cmap_table, 0, 274);
-  sfnt_put_ushort(cmap_table,    0);            /* Version  */
-  sfnt_put_ushort(cmap_table+2,  1);            /* Number of subtables */
-  sfnt_put_ushort(cmap_table+4,  TT_MAC);       /* Platform ID */
-  sfnt_put_ushort(cmap_table+6,  TT_MAC_ROMAN); /* Encoding ID */
-  sfnt_put_ulong (cmap_table+8,  12);           /* Offset   */
-  sfnt_put_ushort(cmap_table+12, 0);            /* Format   */
-  sfnt_put_ushort(cmap_table+14, 262);          /* Length   */
-  sfnt_put_ushort(cmap_table+16, 0);            /* Language */
+  if (cmap_old_format) {
+    cmap_table = NEW(274, char);
+    memset(cmap_table, 0, 274);
+    sfnt_put_ushort(cmap_table,    0);            /* Version  */
+    sfnt_put_ushort(cmap_table+2,  1);            /* Number of subtables */
+    sfnt_put_ushort(cmap_table+4,  TT_MAC);       /* Platform ID */
+    sfnt_put_ushort(cmap_table+6,  TT_MAC_ROMAN); /* Encoding ID */
+    sfnt_put_ulong (cmap_table+8,  12);           /* Offset   */
+    sfnt_put_ushort(cmap_table+12, 0);            /* Format   */
+    sfnt_put_ushort(cmap_table+14, 262);          /* Length   */
+    sfnt_put_ushort(cmap_table+16, 0);            /* Language */
+  } else {
+    cmap_table = NEW(1086, char); /* = 20 + 522 + 544 */
+    memset(cmap_table, 0, 1086);
+    sfnt_put_ushort(cmap_table,    0);            /* Version  */
+    sfnt_put_ushort(cmap_table+2,  2);            /* Number of subtables */
+    sfnt_put_ushort(cmap_table+4,  TT_MAC);       /* Platform ID */
+    sfnt_put_ushort(cmap_table+6,  TT_MAC_ROMAN); /* Encoding ID */
+    sfnt_put_ulong (cmap_table+8,  20);           /* Offset   */
+    sfnt_put_ushort(cmap_table+12, TT_WIN);       /* Platform ID */
+    sfnt_put_ushort(cmap_table+14, TT_WIN_SYMBOL);/* Encoding ID */
+    sfnt_put_ulong (cmap_table+16, 542);          /* Offset   = 20 + 522 */
+    /* (1, 0) subtable */
+    sfnt_put_ushort(cmap_table+20, 6);            /* format   */
+    sfnt_put_ushort(cmap_table+22, 522);          /* length   = 10 + 512 */
+    sfnt_put_ushort(cmap_table+24, 0);            /* language */
+    sfnt_put_ushort(cmap_table+26, 0);            /* firstCode */
+    sfnt_put_ushort(cmap_table+28, 256);          /* entryCount */
+    /* (3, 0) subtable */
+    sfnt_put_ushort(cmap_table+542, 4);           /* format   */
+    sfnt_put_ushort(cmap_table+544, 544);         /* length   = 16 + 8 * 2 + 512 */
+    sfnt_put_ushort(cmap_table+546, 0);           /* language */
+    sfnt_put_ushort(cmap_table+548, 4);           /* segCountX2 */
+    sfnt_put_ushort(cmap_table+550, 4);           /* searchRange */
+    sfnt_put_ushort(cmap_table+552, 1);           /* entrySelector */
+    sfnt_put_ushort(cmap_table+554, 0);           /* rangeShift */
+    sfnt_put_ushort(cmap_table+556, 0xf0ff)       /* endCode[0] */
+    sfnt_put_ushort(cmap_table+558, 0xffff)       /* endCode[1] */
+    sfnt_put_ushort(cmap_table+560, 0);           /* reservedPad */
+    sfnt_put_ushort(cmap_table+562, 0xf000);      /* startCode[0] */
+    sfnt_put_ushort(cmap_table+564, 0xffff);      /* startCode[1] */
+    sfnt_put_short (cmap_table+566, 0);           /* idDelta[0] */
+    sfnt_put_short (cmap_table+568, 1);           /* idDelta[1] */
+    sfnt_put_ushort(cmap_table+570, 4);           /* idRangeOffset[0] */
+    sfnt_put_ushort(cmap_table+572, 0);           /* idRangeOffset[1] */
+  }
 
   glyphs = tt_build_init();
 
@@ -781,7 +903,7 @@ do_custom_encoding (pdf_font *font,
 
     if (!encoding[code] || !strcmp(encoding[code], ".notdef")) {
       WARN("Character code=\"0x%02X\" mapped to \".notdef\" glyph used in font font-file=\"%s\"",
-           code, pdf_font_get_ident(font));
+           code, font->filename);
       WARN(">> Maybe incorrect encoding specified?");
       idx = 0;
     } else {
@@ -796,9 +918,9 @@ do_custom_encoding (pdf_font *font,
        */
       if (error) {
         WARN("Glyph \"%s\" not available in font \"%s\".",
-             encoding[code], pdf_font_get_ident(font));
+             encoding[code], font->filename);
       } else {
-        if (verbose > 1)
+        if (dpx_conf.verbose_level > 1)
           MESG("truetype>> Glyph glyph-name=\"%s\" found at glyph-id=\"%u\".\n", encoding[code], gid);
       }
       idx = tt_find_glyph(glyphs, gid);
@@ -807,7 +929,19 @@ do_custom_encoding (pdf_font *font,
         count++;
       }
     }
-    cmap_table[18 + code] = idx & 0xff; /* bug here */
+    code_to_idx[code] = idx;
+    if (cmap_old_format) {
+      if (idx >= 256) {
+        WARN("Font font-file=\"%s\" uses more than 255 glyphs", font->filename);
+        WARN(">> Glyph glyph-name=\"%s\" will be inaccessible.", encoding[code]);
+        cmap_table[18 + code] = 0;
+      } else {
+        cmap_table[18 + code] = (char)(BYTE)idx;
+      }
+    } else {
+      sfnt_put_ushort(cmap_table +  30 + 2 * code, idx);
+      sfnt_put_ushort(cmap_table + 574 + 2 * code, idx);
+    }
   }
   clean_glyph_mapper(&gm);
 
@@ -820,7 +954,7 @@ do_custom_encoding (pdf_font *font,
 
   for (code = 0; code < 256; code++) {
     if (usedchars[code]) {
-      idx = tt_get_index(glyphs, (USHORT) cmap_table[18+code]);
+      idx = tt_get_index(glyphs, code_to_idx[code]);
       widths[code] = PDFUNIT(glyphs->gd[idx].advw);
     } else {
       widths[code] = 0.0;
@@ -828,12 +962,16 @@ do_custom_encoding (pdf_font *font,
   }
   do_widths(font, widths);
 
-  if (verbose > 1) 
+  if (dpx_conf.verbose_level > 1) 
     MESG("[%d glyphs]", glyphs->num_glyphs);
 
   tt_build_finish(glyphs);
 
-  sfnt_set_table(sfont, "cmap", cmap_table, 274);
+  if (cmap_old_format) {
+    sfnt_set_table(sfont, "cmap", cmap_table,  274);
+  } else {
+    sfnt_set_table(sfont, "cmap", cmap_table, 1086);
+  }
 
   return  0;
 }
@@ -841,24 +979,22 @@ do_custom_encoding (pdf_font *font,
 int
 pdf_font_load_truetype (pdf_font *font)
 {
-  pdf_obj   *descriptor  = pdf_font_get_descriptor(font);
-  char      *ident       = pdf_font_get_ident(font);
-  int        encoding_id = pdf_font_get_encoding(font);
-  char      *usedchars   = pdf_font_get_usedchars(font);
+  pdf_obj   *descriptor  = font->descriptor;
+  char      *ident       = font->filename;
+  int        encoding_id = font->encoding_id;
+  char      *usedchars   = font->usedchars;
 #ifdef  ENABLE_NOEMBED
-  int        embedding   = pdf_font_get_flag(font, PDF_FONT_FLAG_NOEMBED) ? 0 : 1;
+  int        embedding   = font->flags & PDF_FONT_FLAG_NOEMBED ? 0 : 1;
 #endif /* ENABLE_NOEMBED */
-  int        index       = pdf_font_get_index(font);
+  int        index       = font->index;
   char     **enc_vec;
   pdf_obj   *fontfile;
   FILE      *fp = NULL;
   sfnt      *sfont;
   int        i, error = 0;
 
-  if (!pdf_font_is_in_use(font))
+  if (!font->reference)
     return  0;
-
-  verbose = pdf_font_get_verbose();
 
   fp = DPXFOPEN(ident, DPX_RES_TYPE_TTFONT);
   if (!fp) {
@@ -885,7 +1021,7 @@ pdf_font_load_truetype (pdf_font *font)
   }
 
   if (sfont->type == SFNT_TYPE_TTC) {
-    unsigned long offset;
+    ULONG offset;
     offset = ttc_read_offset(sfont, index);
     if (offset == 0) ERROR("Invalid TTC index in %s.", ident);
     error = sfnt_read_table_directory(sfont, offset);
@@ -955,7 +1091,7 @@ pdf_font_load_truetype (pdf_font *font)
   if (fp)
     DPXFCLOSE(fp);
 
-  if (verbose > 1)
+  if (dpx_conf.verbose_level > 1)
     MESG("[%ld bytes]", pdf_stream_length(fontfile));
 
   texpdf_add_dict(descriptor,

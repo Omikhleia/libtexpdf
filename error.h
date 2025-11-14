@@ -1,9 +1,11 @@
 /* This is dvipdfmx, an eXtended version of dvipdfm by Mark A. Wicks.
 
-    Copyright (C) 2002-2014 by Jin-Hwan Cho and Shunsaku Hirata,
+    Copyright (C) 2002-2020 by Jin-Hwan Cho and Shunsaku Hirata,
     the dvipdfmx project team.
     
     Copyright (C) 1998, 1999 by Mark A. Wicks <mwicks@kettering.edu>
+
+    Copyright (C) 2014-2025 by The SILE Typesetter (as libtexpdf).
 
     This program is free software; you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -23,26 +25,12 @@
 #ifndef _ERROR_H_
 #define _ERROR_H_
 
-#if defined(WIN32) 
-#  if defined(__MINGW32__)
-#    define CDECL
-#  endif
-#  undef ERROR
-#  undef NO_ERROR
-#  undef RGB
-#  undef CMYK
-#  undef SETLINECAP
-#  undef SETLINEJOIN
-#  undef SETMITERLIMIT
-#  pragma warning(disable : 4101 4018)
-#else
-#  ifndef __cdecl
-#  define __cdecl
-#  endif
-#  define CDECL
-#endif /* WIN32 */
+#include "system.h"
 
 extern void error_cleanup (void);
+
+/* Acoid conflict with NO_ERROR from <winerror.h>.  */
+#undef NO_ERROR
 
 #define FATAL_ERROR -1
 #define NO_ERROR 0
@@ -52,10 +40,18 @@ extern void error_cleanup (void);
 
 extern void texpdf_debug_level (int quietness);
 
+/* Acoid conflict with ERROR from <winnt.h>.  */
+#undef ERROR
+
 extern void ERROR (const char *fmt, ...);
 extern void MESG  (const char *fmt, ...);
 extern void WARN  (const char *fmt, ...);
 
 #define ASSERT(e) assert(e)
+
+#if defined(WIN32)
+#undef vfprintf
+#define vfprintf win32_vfprintf
+#endif
 
 #endif /* _ERROR_H_ */

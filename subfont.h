@@ -1,8 +1,10 @@
 /* This is dvipdfmx, an eXtended version of dvipdfm by Mark A. Wicks.
 
-    Copyright (C) 2002-2014 by Jin-Hwan Cho and Shunsaku Hirata,
+    Copyright (C) 2002-2020 by Jin-Hwan Cho and Shunsaku Hirata,
     the dvipdfmx project team.
     
+    Copyright (C) 2014-2025 by The SILE Typesetter (as libtexpdf).
+
     This program is free software; you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
     the Free Software Foundation; either version 2 of the License, or
@@ -21,13 +23,11 @@
 #ifndef _SUBFONT_H_
 #define _SUBFONT_H_
 
-extern void   texpdf_subfont_set_verbose (void);
-
 extern void   release_sfd_record  (void);
 
-extern unsigned short texpdf_lookup_sfd_record(int rec_id, unsigned char code);
+extern unsigned short lookup_sfd_record(int rec_id, unsigned char code);
 
-extern int    texpdf_sfd_load_record     (const char *sfd_name, const char *subfont_id);
+extern int    sfd_load_record     (const char *sfd_name, const char *subfont_id);
 extern char **sfd_get_subfont_ids (const char *sfd_name, int *num_subfonts);
 
 #endif /* _SUBFONT_H_ */

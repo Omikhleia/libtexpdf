@@ -1,9 +1,11 @@
 /* This is dvipdfmx, an eXtended version of dvipdfm by Mark A. Wicks.
 
-    Copyright (C) 2002-2014 by Jin-Hwan Cho and Shunsaku Hirata,
+    Copyright (C) 2002-2020 by Jin-Hwan Cho and Shunsaku Hirata,
     the dvipdfmx project team.
 
     Copyright (C) 1998, 1999 by Mark A. Wicks <mwicks@kettering.edu>
+
+    Copyright (C) 2014-2025 by The SILE Typesetter (as libtexpdf).
 
     This program is free software; you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -26,8 +28,11 @@
 #include "cmap.h"
 
 extern pdf_obj *CMap_create_stream (CMap *cmap);
+#if 0
+/* Not completed yet */
 extern pdf_obj *CMap_ToCode_stream (CMap *cmap, const char *cmap_name,
 				    CIDSysInfo *csi, int cmap_type,
 				    unsigned char *used_slot, int flags);
+#endif /* 0 */
 
 #endif /*  _CMAP_WRITE_H_ */

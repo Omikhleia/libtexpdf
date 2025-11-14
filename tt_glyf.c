@@ -1,8 +1,10 @@
 /* This is dvipdfmx, an eXtended version of dvipdfm by Mark A. Wicks.
 
-    Copyright (C) 2002-2014 by Jin-Hwan Cho and Shunsaku Hirata,
+    Copyright (C) 2002-2020 by Jin-Hwan Cho and Shunsaku Hirata,
     the dvipdfmx project team.
     
+    Copyright (C) 2014-2025 by The SILE Typesetter (as libtexpdf).
+
     This program is free software; you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
     the Free Software Foundation; either version 2 of the License, or
@@ -24,6 +26,15 @@
  */
 
 #include "libtexpdf.h"
+
+#include "system.h"
+#include "mem.h"
+#include "error.h"
+#include "dpxutil.h"
+
+#include "sfnt.h"
+#include "tt_table.h"
+#include "tt_glyf.h"
 
 #define NUM_GLYPH_LIMIT        65534
 #define TABLE_DATA_ALLOC_SIZE  40960
@@ -152,7 +163,7 @@ tt_build_finish (struct tt_glyphs *g)
   }
 }
 
-static int CDECL 
+static inline int 
 glyf_cmp (const void *v1, const void *v2)
 {
   int cmp = 0;
@@ -199,7 +210,7 @@ tt_build_tables (sfnt *sfont, struct tt_glyphs *g)
   struct tt_os2__table  *os2;
   /* temp */
   ULONG  *location, offset;
-  long    i;
+  int     i;
   USHORT *w_stat; /* Estimate most frequently appeared width */
 
   ASSERT(g);
@@ -437,8 +448,8 @@ tt_build_tables (sfnt *sfont, struct tt_glyphs *g)
 
     offset = 0UL; prev = 0;
     for (i = 0; i < g->num_glyphs; i++) {
-      long gap, j;
-      gap = (long) g->gd[i].gid - prev - 1;
+      int gap, j;
+      gap = g->gd[i].gid - prev - 1;
       for (j = 1; j <= gap; j++) {
 	if (prev + j == hhea->numOfLongHorMetrics - 1) {
 	  p += sfnt_put_ushort(p, last_advw);
@@ -507,7 +518,7 @@ tt_get_metrics (sfnt *sfont, struct tt_glyphs *g)
   struct tt_os2__table  *os2;
   /* temp */
   ULONG  *location, offset;
-  long    i;
+  int     i;
   USHORT *w_stat;
 
   ASSERT(g);

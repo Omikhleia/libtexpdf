@@ -1,8 +1,10 @@
 /* This is dvipdfmx, an eXtended version of dvipdfm by Mark A. Wicks.
 
-    Copyright (C) 2002-2014 by Jin-Hwan Cho and Shunsaku Hirata,
+    Copyright (C) 2002-2020 by Jin-Hwan Cho and Shunsaku Hirata,
     the dvipdfmx project team.
     
+    Copyright (C) 2014-2025 by The SILE Typesetter (as libtexpdf).
+
     This program is free software; you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
     the Free Software Foundation; either version 2 of the License, or
@@ -21,6 +23,16 @@
 /* Based on dvipdfmx-0.13.2c */
 
 #include "libtexpdf.h"
+
+#include <string.h>
+
+#include "system.h"
+
+#include "error.h"
+#include "mem.h"
+#include "mfileio.h"
+
+#include "sfnt.h"
 
 /*
  * type:
@@ -130,7 +142,7 @@ dfont_open (FILE *fp, int index)
 static void
 release_directory (struct sfnt_table_directory *td)
 {
-  long i;
+  int i;
 
   if (td) {
     if (td->tables) {
@@ -180,7 +192,7 @@ put_big_endian (void *s, LONG q, int n)
  * in a machine independent way.
  */
 static void
-convert_tag (char *tag, unsigned long u_tag)
+convert_tag (char *tag, uint32_t u_tag)
 {
   int i;
 
@@ -344,7 +356,8 @@ int
 sfnt_read_table_directory (sfnt *sfont, ULONG offset)
 {
   struct sfnt_table_directory *td;
-  unsigned long i, u_tag;
+  int i;
+  uint32_t u_tag;
 
   ASSERT(sfont);
 
@@ -426,7 +439,7 @@ sfnt_create_FontFile_stream (sfnt *sfont)
   pdf_obj *stream;
   pdf_obj *stream_dict;
   struct sfnt_table_directory *td;
-  long     offset, nb_read, length;
+  int      offset, nb_read, length;
   int      i, sr;
   char    *p;
 

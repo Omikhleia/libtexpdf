@@ -1,8 +1,10 @@
 /* This is dvipdfmx, an eXtended version of dvipdfm by Mark A. Wicks.
 
-    Copyright (C) 2002-2014 by Jin-Hwan Cho and Shunsaku Hirata,
+    Copyright (C) 2002-2020 by Jin-Hwan Cho and Shunsaku Hirata,
     the dvipdfmx project team.
     
+    Copyright (C) 2014-2025 by The SILE Typesetter (as libtexpdf).
+
     This program is free software; you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
     the Free Software Foundation; either version 2 of the License, or
@@ -17,22 +19,23 @@
     along with this program; if not, write to the Free Software
     Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA.
 */
+
 #include "libtexpdf.h"
 
-static int verbose = 0;
-static int always_embed = 0;
+#include "system.h"
+#include "mem.h"
+#include "error.h"
+#include "numbers.h"
+#include "dpxconf.h"
 
-void texpdf_tt_aux_set_verbose(void)
-{
-  ++verbose;
-}
+#include "pdfobj.h"
 
-void texpdf_tt_aux_set_always_embed(void)
-{
-  ++always_embed;
-}
+#include "sfnt.h"
+#include "tt_table.h"
+#include "tt_post.h"
+#include "tt_aux.h"
 
-ULONG ttc_read_offset (sfnt *sfont, int ttc_idx)
+ULONG ttc_read_offset (sfnt *sfont, ULONG ttc_idx)
 {
   ULONG offset = 0, num_dirs = 0;
   
@@ -46,7 +49,7 @@ ULONG ttc_read_offset (sfnt *sfont, int ttc_idx)
 
   /* version = */ sfnt_get_ulong(sfont);
   num_dirs = sfnt_get_ulong(sfont);
-  if (ttc_idx < 0 || ttc_idx > num_dirs - 1)
+  if (ttc_idx > num_dirs - 1)
     ERROR("Invalid TTC index number");
 
   sfnt_seek_set (sfont, 12 + ttc_idx * 4);
@@ -172,17 +175,17 @@ pdf_obj *tt_get_fontdesc (sfnt *sfont, int *embed, int stemv, int type, const ch
       /* the least restrictive license granted takes precedence. */
       *embed = 1;
     } else if (os2->fsType & 0x0004) {
-      if (verbose > 0)
+      if (dpx_conf.verbose_level > 0)
         WARN("Font \"%s\" permits \"Preview & Print\" embedding only **\n", fontname);
       *embed = 1;
     } else {
-      if (always_embed) {
-        if (verbose > 0)
+      if (dpx_conf.ignore_font_license) {
+        if (dpx_conf.verbose_level > 0)
           WARN("Font \"%s\" may be subject to embedding restrictions **\n", fontname);
         *embed = 1;
       }
       else {
-        if (verbose > 0)
+        if (dpx_conf.verbose_level > 0)
           WARN("Embedding of font \"%s\" disabled due to license restrictions", fontname);
         *embed = 0;
       }

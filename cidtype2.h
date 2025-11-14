@@ -1,8 +1,10 @@
 /* This is dvipdfmx, an eXtended version of dvipdfm by Mark A. Wicks.
 
-    Copyright (C) 2002-2014 by Jin-Hwan Cho and Shunsaku Hirata,
+    Copyright (C) 2002-2020 by Jin-Hwan Cho and Shunsaku Hirata,
     the dvipdfmx project team.
     
+    Copyright (C) 2014-2025 by The SILE Typesetter (as libtexpdf).
+
     This program is free software; you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
     the Free Software Foundation; either version 2 of the License, or
@@ -21,14 +23,9 @@
 #ifndef _CIDTYPE2_H_
 #define _CIDTYPE2_H_
 
-#include "cid.h"
-#include "cid_p.h"
+#include "pdffont.h"
 
-extern void CIDFont_type2_set_verbose (void);
-extern void CIDFont_type2_set_flags   (long flags);
-
-extern int  CIDFont_type2_open    (CIDFont *font, const char *name,
-				   CIDSysInfo *cmap_csi, cid_opt *opt);
-extern void CIDFont_type2_dofont  (CIDFont *font);
+extern int  CIDFont_type2_open   (pdf_font *font, const char *name, int index, cid_opt *opt);
+extern int  CIDFont_type2_dofont (pdf_font *font);
 
 #endif /* _CIDTYPE2_H_ */

@@ -1,9 +1,11 @@
 /* This is dvipdfmx, an eXtended version of dvipdfm by Mark A. Wicks.
 
-    Copyright (C) 2002-2014 by Jin-Hwan Cho and Shunsaku Hirata,
+    Copyright (C) 2002-2020 by Jin-Hwan Cho and Shunsaku Hirata,
     the dvipdfmx project team.
     
     Copyright (C) 1998, 1999 by Mark A. Wicks <mwicks@kettering.edu>
+
+    Copyright (C) 2014-2025 by The SILE Typesetter (as libtexpdf).
 
     This program is free software; you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -21,22 +23,30 @@
 */
 
 #include "libtexpdf.h"
-void *new (size_t size)
+
+#include <stdio.h>	
+#include <stdlib.h>
+
+#include "system.h"
+#include "mem.h"
+#include "error.h"
+
+void *new (uint32_t size)
 {
-  void *result = malloc (size);
+  void *result = malloc ((size_t)size);
   if (!result) {
-    ERROR("Out of memory - asked for %lu bytes\n", (unsigned long) size);
+    ERROR("Out of memory - asked for %u bytes\n", size);
   }
 
   return result;
 }
 
-void *renew (void *mem, size_t size)
+void *renew (void *mem, uint32_t size)
 {
   if (size) {
-    void *result = realloc (mem, size);
+    void *result = realloc (mem, (size_t)size);
     if (!result) {
-      ERROR("Out of memory - asked for %lu bytes\n", (unsigned long) size);
+      ERROR("Out of memory - asked for %u bytes\n", size);
     }
     return result;
   } else {

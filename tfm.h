@@ -1,9 +1,11 @@
 /* This is dvipdfmx, an eXtended version of dvipdfm by Mark A. Wicks.
 
-    Copyright (C) 2002-2014 by Jin-Hwan Cho and Shunsaku Hirata,
+    Copyright (C) 2002-2020 by Jin-Hwan Cho and Shunsaku Hirata,
     the dvipdfmx project team.
     
     Copyright (C) 1998, 1999 by Mark A. Wicks <mwicks@kettering.edu>
+
+    Copyright (C) 2014-2025 by The SILE Typesetter (as libtexpdf).
 
     This program is free software; you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -25,33 +27,35 @@
 
 #include "numbers.h"
 
-extern void texpdf_tfm_set_verbose (void);
+#define UCS_LASTCHAR   0x10FFFFUL
+#define JFM_LASTCHAR   0xFFFFFFUL
 
-extern int  texpdf_tfm_open (const char *path, const char * tex_name, int must_exist);
-extern void texpdf_tfm_close_all (void);
+extern int  tfm_open (const char * tex_name, int must_exist);
+extern void tfm_close_all (void);
 
-extern double texpdf_tfm_get_width  (int font_id, int32_t ch);
+extern double tfm_get_width  (int font_id, int32_t ch);
 #if 0
-extern double texpdf_tfm_get_height (int font_id, int32_t ch);
-extern double texpdf_tfm_get_depth  (int font_id, int32_t ch);
+extern double tfm_get_height (int font_id, int32_t ch);
+extern double tfm_get_depth  (int font_id, int32_t ch);
 #endif
 
-extern fixword texpdf_tfm_get_fw_width  (int font_id, int32_t ch);
-extern fixword texpdf_tfm_get_fw_height (int font_id, int32_t ch);
-extern fixword texpdf_tfm_get_fw_depth  (int font_id, int32_t ch);
+extern fixword tfm_get_fw_width  (int font_id, int32_t ch);
+extern fixword tfm_get_fw_height (int font_id, int32_t ch);
+extern fixword tfm_get_fw_depth  (int font_id, int32_t ch);
 
 extern fixword tfm_string_width  (int font_id, const unsigned char *s, unsigned len);
+#if 0
 extern fixword tfm_string_depth  (int font_id, const unsigned char *s, unsigned len);
 extern fixword tfm_string_height (int font_id, const unsigned char *s, unsigned len);
-
-extern double texpdf_tfm_get_space (int font_id);
+#endif
 
 /* From TFM header */
-extern double texpdf_tfm_get_design_size  (int font_id);
+extern double tfm_get_design_size  (int font_id);
 #if 0
-extern char  *texpdf_tfm_get_codingscheme (int font_id);
+extern char  *tfm_get_codingscheme (int font_id);
 extern int tfm_is_vert (int font_id);
 #endif
+extern int tfm_is_jfm (int font_id);
 
 extern int tfm_exists  (const char *tfm_name);
 

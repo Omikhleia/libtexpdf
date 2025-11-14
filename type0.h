@@ -1,8 +1,10 @@
 /* This is dvipdfmx, an eXtended version of dvipdfm by Mark A. Wicks.
 
-    Copyright (C) 2002-2014 by Jin-Hwan Cho and Shunsaku Hirata,
+    Copyright (C) 2002-2020 by Jin-Hwan Cho and Shunsaku Hirata,
     the dvipdfmx project team.
     
+    Copyright (C) 2014-2025 by The SILE Typesetter (as libtexpdf).
+
     This program is free software; you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
     the Free Software Foundation; either version 2 of the License, or
@@ -21,32 +23,9 @@
 #ifndef _TYPE0_H_
 #define _TYPE0_H_
 
-#include "pdfobj.h"
+#include "pdffont.h"
 
-#define add_to_used_chars2(b,c) {(b)[(c)/8] |= (1 << (7-((c)%8)));}
-#define is_used_char2(b,c) (((b)[(c)/8]) & (1 << (7-((c)%8))))
-
-typedef struct Type0Font Type0Font;
-
-extern void       Type0Font_set_verbose (void);
-
-extern int        Type0Font_get_wmode     (Type0Font *font);
-#if 0
-extern char      *Type0Font_get_encoding  (Type0Font *font);
-#endif
-extern char      *Type0Font_get_usedchars (Type0Font *font);
-
-extern pdf_obj   *Type0Font_get_resource  (Type0Font *font);
-
-extern void       Type0Font_set_ToUnicode (Type0Font *font, pdf_obj *cmap_ref);
-
-#include "fontmap.h"
-
-/******************************** CACHE ********************************/
-
-extern void       Type0Font_cache_init  (void);
-extern Type0Font *Type0Font_cache_get   (int id);
-extern int        Type0Font_cache_find  (const char *map_name, int cmap_id, fontmap_opt *fmap_opt);
-extern void       Type0Font_cache_close (void);
+extern void pdf_font_load_type0 (pdf_font *font);
+extern int  pdf_font_open_type0 (pdf_font *font, int cid_id, int wmode);
 
 #endif /* _TYPE0_H_ */

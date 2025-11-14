@@ -1,9 +1,11 @@
 /* This is dvipdfmx, an eXtended version of dvipdfm by Mark A. Wicks.
 
-    Copyright (C) 2002-2014 by Jin-Hwan Cho and Shunsaku Hirata,
+    Copyright (C) 2002-2020 by Jin-Hwan Cho and Shunsaku Hirata,
     the dvipdfmx project team.
 
     Copyright (C) 1998, 1999 by Mark A. Wicks <mwicks@kettering.edu>
+
+    Copyright (C) 2014-2025 by The SILE Typesetter (as libtexpdf).
 
     This program is free software; you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -22,6 +24,17 @@
 
 #include "libtexpdf.h"
 
+#include <string.h>
+#include <ctype.h>
+
+#include "system.h"
+#include "mem.h"
+#include "error.h"
+#include "dpxutil.h"
+#include "pst_obj.h"
+#include "pst.h"
+
+
 #define TYPE_CHECK(o, t) do { \
                              if ((o) == NULL || pst_type_of((o)) != (t)) \
                                   ERROR("typecheck: object %p not of type %d.", (o), (t)); \
@@ -32,7 +45,7 @@ pst_parse_any (unsigned char **inbuf, unsigned char *inbufend)
 {
   unsigned char *data;
   unsigned char *cur = *inbuf;
-  unsigned long  len;
+  unsigned int   len;
 
   while (cur < inbufend && !PST_TOKEN_END(cur, inbufend))
     cur++;
@@ -47,7 +60,7 @@ pst_parse_any (unsigned char **inbuf, unsigned char *inbufend)
 }
 
 static void
-pst_skip_line (unsigned char **inbuf, unsigned char *inbufend)
+skip_line (unsigned char **inbuf, unsigned char *inbufend)
 {
   while (*inbuf < inbufend && **inbuf != '\n' && **inbuf != '\r')
     (*inbuf)++;
@@ -61,7 +74,7 @@ static void
 skip_comments (unsigned char **inbuf, unsigned char *inbufend)
 {
   while (*inbuf < inbufend && **inbuf == '%') {
-    pst_skip_line(inbuf, inbufend);
+    skip_line(inbuf, inbufend);
     texpdf_skip_white_spaces(inbuf, inbufend);
   }
 }
@@ -72,7 +85,7 @@ pst_parse_comment (unsigned char **inbuf, unsigned char *inbufend)
 {
   unsigned char *data;
   unsigned char *cur = *inbuf;
-  unsigned long  len;
+  unsigned int   len;
 
   if (*cur != '%')
     return NULL;

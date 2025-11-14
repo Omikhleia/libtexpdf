@@ -1,9 +1,11 @@
 /* This is dvipdfmx, an eXtended version of dvipdfm by Mark A. Wicks.
 
-    Copyright (C) 2008-2014 by Jin-Hwan Cho, Matthias Franz, and Shunsaku Hirata,
+    Copyright (C) 2002-2020 by Jin-Hwan Cho, Matthias Franz, and Shunsaku Hirata,
     the dvipdfmx project team.
 
     Copyright (C) 1998, 1999 by Mark A. Wicks <mwicks@kettering.edu>
+
+    Copyright (C) 2014-2025 by The SILE Typesetter (as libtexpdf).
 
     This program is free software; you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -21,6 +23,38 @@
 */
 
 #include "libtexpdf.h"
+
+#include <string.h>
+#include <math.h>
+
+#include "system.h"
+#include "mem.h"
+#include "error.h"
+#include "dpxconf.h"
+#include "dpxfile.h"
+
+#include "numbers.h"
+
+#include "pdfobj.h"
+#include "pdffont.h"
+
+#include "pdfencoding.h"
+#include "unicode.h"
+
+#include "dpxutil.h"
+
+#include "pst_obj.h"
+#include "pst.h"
+
+#include "cff_limits.h"
+#include "cff_types.h"
+#include "cff_dict.h"
+#include "cff.h"
+
+#include "t1_load.h"
+#include "t1_char.h"
+
+#include "type1.h"
 
 #define FONT_FLAG_FIXEDPITCH (1 << 0)  /* Fixed-width font */
 #define FONT_FLAG_SERIF      (1 << 1)  /* Serif font */
@@ -53,34 +87,42 @@ is_basefont (const char *name)
 }
 
 int
-pdf_font_open_type1 (pdf_font *font)
+pdf_font_open_type1 (pdf_font *font, const char *ident, int index, int encoding_id, int embedding)
 {
-  char    *ident;
   FILE    *fp;
   char     fontname[PDF_NAME_LEN_MAX+1];
 
   ASSERT(font);
+  ASSERT(ident);
 
-  ident = pdf_font_get_ident(font);
+  if (index != 0) {
+    WARN("Ignoring non-zero font index: %s", ident);
+  }
 
   if (is_basefont(ident)) {
-    pdf_font_set_fontname(font, ident);
-    pdf_font_set_subtype (font, PDF_FONT_FONTTYPE_TYPE1);
-    pdf_font_set_flags   (font,
-			  (PDF_FONT_FLAG_NOEMBED|PDF_FONT_FLAG_BASEFONT));
+    font->fontname = NEW(strlen(ident)+1, char);
+    strcpy(font->fontname, ident);
+    font->subtype  = PDF_FONT_FONTTYPE_TYPE1;
+    font->flags   |= PDF_FONT_FLAG_NOEMBED;
+    font->flags   |= PDF_FONT_FLAG_BASEFONT;
   } else {
     fp = DPXFOPEN(ident, DPX_RES_TYPE_T1FONT);
     if (!fp)
       return -1;
 
+    if (!embedding) {
+      WARN("Ignoring no-embed option for Type1 font: %s", ident);
+      font->flags &= ~PDF_FONT_FLAG_NOEMBED;
+    }
     memset(fontname, 0, PDF_NAME_LEN_MAX+1);
     if (!is_pfb(fp) || t1_get_fontname(fp, fontname) < 0) {
       ERROR("Failed to read Type 1 font \"%s\".", ident);
     }
     DPXFCLOSE(fp);
 
-    pdf_font_set_fontname(font, fontname);
-    pdf_font_set_subtype (font, PDF_FONT_FONTTYPE_TYPE1);
+    font->fontname = NEW(strlen(fontname)+1, char);
+    strcpy(font->fontname, fontname);
+    font->subtype  = PDF_FONT_FONTTYPE_TYPE1;
   }
 
   return 0;
@@ -94,7 +136,7 @@ get_font_attr (pdf_font *font, cff_font *cffont)
   double   capheight, ascent, descent;
   double   italicangle, stemv;
   double   defaultwidth, nominalwidth;
-  long     flags = 0, gid, i;
+  int      flags = 0, gid, i;
   static const char *L_c[] = {
     "H", "P", "Pi", "Rho", NULL
   };
@@ -151,8 +193,8 @@ get_font_attr (pdf_font *font, cff_font *cffont)
   gid = cff_glyph_lookup(cffont, "space");
   if (gid >= 0 && gid < cffont->cstrings->count) {
     t1char_get_metrics(cffont->cstrings->data + cffont->cstrings->offset[gid] - 1,
-		       cffont->cstrings->offset[gid+1] - cffont->cstrings->offset[gid],
-		       cffont->subrs[0], &gm);
+                       cffont->cstrings->offset[gid+1] - cffont->cstrings->offset[gid],
+                       cffont->subrs[0], &gm);
     defaultwidth = gm.wx;
   }
 
@@ -160,8 +202,8 @@ get_font_attr (pdf_font *font, cff_font *cffont)
     gid = cff_glyph_lookup(cffont, L_c[i]);
     if (gid >= 0 && gid < cffont->cstrings->count) {
       t1char_get_metrics(cffont->cstrings->data + cffont->cstrings->offset[gid] - 1,
-		      cffont->cstrings->offset[gid+1] - cffont->cstrings->offset[gid],
-		      cffont->subrs[0], &gm);
+                      cffont->cstrings->offset[gid+1] - cffont->cstrings->offset[gid],
+                      cffont->subrs[0], &gm);
       capheight = gm.bbox.ury;
       break;
     }
@@ -171,8 +213,8 @@ get_font_attr (pdf_font *font, cff_font *cffont)
     gid = cff_glyph_lookup(cffont, L_d[i]);
     if (gid >= 0 && gid < cffont->cstrings->count) {
       t1char_get_metrics(cffont->cstrings->data + cffont->cstrings->offset[gid] - 1,
-			 cffont->cstrings->offset[gid+1] - cffont->cstrings->offset[gid],
-			 cffont->subrs[0], &gm);
+                         cffont->cstrings->offset[gid+1] - cffont->cstrings->offset[gid],
+                         cffont->subrs[0], &gm);
       descent = gm.bbox.lly;
       break;
     }
@@ -182,8 +224,8 @@ get_font_attr (pdf_font *font, cff_font *cffont)
     gid = cff_glyph_lookup(cffont, L_a[i]);
     if (gid >= 0 && gid < cffont->cstrings->count) {
       t1char_get_metrics(cffont->cstrings->data + cffont->cstrings->offset[gid] - 1,
-			 cffont->cstrings->offset[gid+1] - cffont->cstrings->offset[gid],
-			 cffont->subrs[0], &gm);
+                         cffont->cstrings->offset[gid+1] - cffont->cstrings->offset[gid],
+                         cffont->subrs[0], &gm);
       ascent = gm.bbox.ury;
       break;
     }
@@ -206,7 +248,7 @@ get_font_attr (pdf_font *font, cff_font *cffont)
     flags |= FONT_FLAG_FIXEDPITCH;
   }
 
-  fontname   = pdf_font_get_fontname  (font);
+  fontname   = font->fontname;
   descriptor = pdf_font_get_descriptor(font);
 
   if (fontname && !strstr(fontname, "Sans")) {
@@ -218,34 +260,34 @@ get_font_attr (pdf_font *font, cff_font *cffont)
   flags |= FONT_FLAG_SYMBOLIC; /* FIXME */
 
   texpdf_add_dict(descriptor,
-	       texpdf_new_name("CapHeight"), texpdf_new_number(capheight));
+               texpdf_new_name("CapHeight"), texpdf_new_number(capheight));
   texpdf_add_dict(descriptor,
-	       texpdf_new_name("Ascent"), texpdf_new_number(ascent));
+               texpdf_new_name("Ascent"), texpdf_new_number(ascent));
   texpdf_add_dict(descriptor,
-	       texpdf_new_name("Descent"), texpdf_new_number(descent));
+               texpdf_new_name("Descent"), texpdf_new_number(descent));
   texpdf_add_dict(descriptor,
-	       texpdf_new_name("ItalicAngle"), texpdf_new_number(italicangle));
+               texpdf_new_name("ItalicAngle"), texpdf_new_number(italicangle));
   texpdf_add_dict(descriptor,
-	       texpdf_new_name("StemV"), texpdf_new_number(stemv));
+               texpdf_new_name("StemV"), texpdf_new_number(stemv));
   texpdf_add_dict(descriptor,
-	       texpdf_new_name("Flags"), texpdf_new_number(flags));
+               texpdf_new_name("Flags"), texpdf_new_number(flags));
 }
 
 static void
-add_metrics (pdf_font *font, cff_font *cffont, char **enc_vec, double *widths, long num_glyphs)
+add_metrics (pdf_font *font, cff_font *cffont, char **enc_vec, double *widths, int num_glyphs)
 {
   pdf_obj *fontdict, *descriptor;
-  pdf_obj *tmp_array;
+  pdf_obj *array;
   int      code, firstchar, lastchar;
   double   val;
   int      i;
-  int tfm_id;
   char    *usedchars;
-  double   scaling;
+  double   scaling = 1.0;
+  double   norm_widths[256];
 
   fontdict   = pdf_font_get_resource  (font);
   descriptor = pdf_font_get_descriptor(font);
-  usedchars  = pdf_font_get_usedchars (font);
+  usedchars  = font->usedchars;
 
   /*
    * The original FontBBox of the font is preserved, instead
@@ -261,73 +303,73 @@ add_metrics (pdf_font *font, cff_font *cffont, char **enc_vec, double *widths, l
    * to the default scaling of 1000:1, not relative to the scaling
    * given by the font matrix.
    */
-  if (cff_dict_known(cffont->topdict, "FontMatrix"))
+  if (cff_dict_known(cffont->topdict, "FontMatrix")) {
     scaling = 1000*cff_dict_get(cffont->topdict, "FontMatrix", 0);
-  else
+  } else {
     scaling = 1;
+  }
 
-  tmp_array = texpdf_new_array();
+  array = texpdf_new_array();
   for (i = 0; i < 4; i++) {
     val = cff_dict_get(cffont->topdict, "FontBBox", i);
-    texpdf_add_array(tmp_array, texpdf_new_number(ROUND(val, 1.0)));
+    texpdf_add_array(array, texpdf_new_number(ROUND(val, 1.0)));
   }
-  texpdf_add_dict(descriptor, texpdf_new_name("FontBBox"), tmp_array);
+  texpdf_add_dict(descriptor, texpdf_new_name("FontBBox"), texpdf_link_obj(array));
+  texpdf_release_obj(array);
 
-  tmp_array = texpdf_new_array();
+  array = texpdf_new_array();
   if (num_glyphs <= 1) { /* This must be an error. */
     firstchar = lastchar = 0;
-    texpdf_add_array(tmp_array, texpdf_new_number(0.0));
+    texpdf_add_array(array, texpdf_new_number(0.0));
   } else {
     for (firstchar = 255, lastchar = 0, code = 0; code < 256; code++) {
       if (usedchars[code]) {
-	if (code < firstchar) firstchar = code;
-	if (code > lastchar)  lastchar  = code;
+        if (code < firstchar) firstchar = code;
+        if (code > lastchar)  lastchar  = code;
+        norm_widths[code] = scaling * widths[cff_glyph_lookup(cffont, enc_vec[code])];       
       }
     }
     if (firstchar > lastchar) {
       WARN("No glyphs actually used???");
-      texpdf_release_obj(tmp_array);
+      texpdf_release_obj(array);
       return;
     }
-    tfm_id = texpdf_tfm_open(pdf_font_get_tfm_path(font), pdf_font_get_mapname(font), 0);
+
+    pdf_check_tfm_widths(font->ident, norm_widths, firstchar, lastchar, usedchars);
+
     for (code = firstchar; code <= lastchar; code++) {
       if (usedchars[code]) {
-        double width;
-        if (tfm_id < 0) /* tfm is not found */
-	  width = scaling * widths[cff_glyph_lookup(cffont, enc_vec[code])];
-        else
-          width = 1000. * texpdf_tfm_get_width(tfm_id, code);
-	texpdf_add_array(tmp_array,
-		      texpdf_new_number(ROUND(width, 0.1)));
+        texpdf_add_array(array, texpdf_new_number(ROUND(norm_widths[code], 0.1)));
       } else {
-	texpdf_add_array(tmp_array, texpdf_new_number(0.0));
+        texpdf_add_array(array, texpdf_new_number(0.0));
       }
     }
   }
 
-  if (texpdf_array_length(tmp_array) > 0) {
-    texpdf_add_dict(fontdict,
-		 texpdf_new_name("Widths"),  texpdf_ref_obj(tmp_array));
+  if (texpdf_array_length(array) > 0) {
+    texpdf_add_dict(fontdict, texpdf_new_name("Widths"),  texpdf_ref_obj(array));
   }
-  texpdf_release_obj(tmp_array);
+  texpdf_release_obj(array);
 
-  texpdf_add_dict(fontdict,
-	       texpdf_new_name("FirstChar"), texpdf_new_number(firstchar));
-  texpdf_add_dict(fontdict,
-	       texpdf_new_name("LastChar"),  texpdf_new_number(lastchar));
+  texpdf_add_dict(fontdict, texpdf_new_name("FirstChar"), texpdf_new_number(firstchar));
+  texpdf_add_dict(fontdict, texpdf_new_name("LastChar"),  texpdf_new_number(lastchar));
 
   return;
 }
 
 
-static long
+static int
+#if defined(LIBDPX)
 write_fontfile (pdf_font *font, cff_font *cffont)
+#else
+write_fontfile (pdf_font *font, cff_font *cffont, pdf_obj *pdfcharset)
+#endif /* LIBDPX */
 {
   pdf_obj   *descriptor;
   pdf_obj   *fontfile, *stream_dict;
   cff_index *topdict;
-  long       private_size, stream_data_len, charstring_len;
-  long       topdict_offset, offset;
+  int        private_size, stream_data_len, charstring_len;
+  int        topdict_offset, offset;
 #define  WBUF_SIZE 1024
   card8     *stream_data_ptr, wbuf[WBUF_SIZE];
 
@@ -377,38 +419,38 @@ write_fontfile (pdf_font *font, cff_font *cffont)
   offset = 0;
   /* Header */
   offset += cff_put_header(cffont,
-			   stream_data_ptr + offset, stream_data_len - offset);
+                           stream_data_ptr + offset, stream_data_len - offset);
   /* Name */
   offset += cff_pack_index(cffont->name,
-			   stream_data_ptr + offset, stream_data_len - offset);
+                           stream_data_ptr + offset, stream_data_len - offset);
   /* Top DICT */
   topdict_offset = offset;
   offset += cff_index_size(topdict);
   /* Strings */
   offset += cff_pack_index(cffont->string,
-			   stream_data_ptr + offset, stream_data_len - offset);
+                           stream_data_ptr + offset, stream_data_len - offset);
   /* Global Subrs */
   offset += cff_pack_index(cffont->gsubr,
-			   stream_data_ptr + offset, stream_data_len - offset);
+                           stream_data_ptr + offset, stream_data_len - offset);
   /* Encoding */
   /* TODO: don't write Encoding entry if the font is always used
    * with PDF Encoding information. Applies to type1c.c as well.
    */
   cff_dict_set(cffont->topdict, "Encoding", 0, offset);
   offset += cff_pack_encoding(cffont,
-			      stream_data_ptr + offset, stream_data_len - offset);
+                              stream_data_ptr + offset, stream_data_len - offset);
   /* charset */
   cff_dict_set(cffont->topdict, "charset", 0, offset);
   offset += cff_pack_charsets(cffont,
-			      stream_data_ptr + offset, stream_data_len - offset);
+                              stream_data_ptr + offset, stream_data_len - offset);
   /* CharStrings */
   cff_dict_set(cffont->topdict, "CharStrings", 0, offset);
   offset += cff_pack_index(cffont->cstrings,
-			   stream_data_ptr + offset, charstring_len);
+                           stream_data_ptr + offset, charstring_len);
   /* Private */
   if ((cffont->private)[0] && private_size > 0) {
     private_size = cff_dict_pack(cffont->private[0],
-				 stream_data_ptr + offset, private_size);
+                                 stream_data_ptr + offset, private_size);
     cff_dict_set(cffont->topdict, "Private", 1, offset);
     cff_dict_set(cffont->topdict, "Private", 0, private_size);
   }
@@ -418,7 +460,7 @@ write_fontfile (pdf_font *font, cff_font *cffont)
   topdict->data = NEW(topdict->offset[1] - 1, card8);
   cff_dict_pack (cffont->topdict, topdict->data, topdict->offset[1] - 1);
   cff_pack_index(topdict,
-		 stream_data_ptr + topdict_offset, cff_index_size(topdict));
+                 stream_data_ptr + topdict_offset, cff_index_size(topdict));
   cff_release_index(topdict);
 
   /* Copyright and Trademark Notice ommited. */
@@ -427,12 +469,19 @@ write_fontfile (pdf_font *font, cff_font *cffont)
   fontfile    = texpdf_new_stream(STREAM_COMPRESS);
   stream_dict = texpdf_stream_dict(fontfile);
   texpdf_add_dict(descriptor,
-	       texpdf_new_name("FontFile3"), texpdf_ref_obj (fontfile));
+               texpdf_new_name("FontFile3"), texpdf_ref_obj (fontfile));
   texpdf_add_dict(stream_dict,
-	       texpdf_new_name("Subtype"),   texpdf_new_name("Type1C"));
+               texpdf_new_name("Subtype"),   texpdf_new_name("Type1C"));
   texpdf_add_stream (fontfile, (void *) stream_data_ptr,  offset);
   texpdf_release_obj(fontfile);
-
+#if !defined(LIBDPX)
+  if (texpdf_check_version(2, 0) < 0) {
+    texpdf_add_dict(descriptor,
+                texpdf_new_name("CharSet"),
+                texpdf_new_string(pdf_stream_dataptr(pdfcharset),
+                               pdf_stream_length(pdfcharset)));
+  }
+#endif /* !LIBDPX */
   RELEASE(stream_data_ptr);
 
   return offset;
@@ -443,6 +492,9 @@ int
 pdf_font_load_type1 (pdf_font *font)
 {
   pdf_obj      *fontdict;
+#if !defined(LIBDPX)
+  pdf_obj      *pdfcharset; /* Actually string object */
+#endif /* !LIBDPX */
   int           encoding_id;
   char         *usedchars, *ident;
   char         *fontname, *uniqueTag;
@@ -454,28 +506,24 @@ pdf_font_load_type1 (pdf_font *font)
   double       *widths;
   card16       *GIDMap, num_glyphs = 0;
   FILE         *fp;
-  long          offset;
-  int           code, verbose;
+  int           offset;
+  int           code;
 
   ASSERT(font);
 
-  if (!pdf_font_is_in_use(font)) {
+  if (!font->reference)
     return 0;
-  }
 
-  verbose     = pdf_font_get_verbose();
+  fontdict    = pdf_font_get_resource(font);
+  encoding_id = font->encoding_id;
+  usedchars   = font->usedchars;
+  ident       = font->filename;
+  fontname    = font->fontname;
+  uniqueTag   = pdf_font_get_uniqueTag(font);
 
-  encoding_id = pdf_font_get_encoding  (font);
-  fontdict    = pdf_font_get_resource  (font);
-
-                pdf_font_get_descriptor(font);
-  usedchars   = pdf_font_get_usedchars (font);
-  ident       = pdf_font_get_ident     (font);
-  fontname    = pdf_font_get_fontname  (font);
-  uniqueTag   = pdf_font_get_uniqueTag (font);
-  if (!usedchars || !ident || !fontname) {
-    ERROR("Type1: Unexpected error.");
-  }
+  ASSERT(usedchars);
+  ASSERT(ident);
+  ASSERT(fontname);
 
   fp = DPXFOPEN(ident, DPX_RES_TYPE_T1FONT);
   if (!fp) {
@@ -516,7 +564,7 @@ pdf_font_load_type1 (pdf_font *font)
      */
     if (!texpdf_lookup_dict(fontdict, "ToUnicode")) {
     tounicode = pdf_create_ToUnicode_CMap(fullname,
-					  enc_vec, usedchars);
+                                          enc_vec, usedchars);
     if (tounicode) {
       texpdf_add_dict(fontdict,
                      texpdf_new_name("ToUnicode"),
@@ -545,9 +593,12 @@ pdf_font_load_type1 (pdf_font *font)
   /* Create CFF encoding, charset, sort glyphs */
 #define MAX_GLYPHS 1024
   GIDMap = NEW(MAX_GLYPHS, card16);
+#if !defined(LIBDPX)
+  pdfcharset = texpdf_new_stream(0);
+#endif /* !LIBDPX */
   {
     int     prev, duplicate;
-    long    gid;
+    int     gid;
     char   *glyph;
     s_SID   sid;
 
@@ -567,57 +618,63 @@ pdf_font_load_type1 (pdf_font *font)
     if (gid < 0)
       ERROR("Type 1 font with no \".notdef\" glyph???");
     GIDMap[0] = (card16) gid;
-    if (verbose > 2)
+    if (dpx_conf.verbose_level > 2)
       MESG("[glyphs:/.notdef");
     num_glyphs =  1;
     for (prev = -2, code = 0; code <= 0xff; code++) {
       glyph = enc_vec[code];
 
       if (!usedchars[code])
-	continue;
+        continue;
       if (glyph && !strcmp(glyph, ".notdef")) {
-	WARN("Character mapped to .notdef used in font: %s",
-	     fontname);
-	usedchars[code] = 0;
-	continue;
+        WARN("Character mapped to .notdef used in font: %s",
+             fontname);
+        usedchars[code] = 0;
+        continue;
       }
 
       gid = cff_glyph_lookup(cffont, glyph);
       if (gid < 1 || gid >= cffont->cstrings->count) {
-	WARN("Glyph \"%s\" missing in font \"%s\".", glyph, fontname);
-	usedchars[code] = 0;
-	continue;
+        WARN("Glyph \"%s\" missing in font \"%s\".", glyph, fontname);
+        usedchars[code] = 0;
+        continue;
       }
 
       for (duplicate = 0; duplicate < code; duplicate++) {
-	if (usedchars[duplicate] &&
-	    enc_vec[duplicate]   && !strcmp(enc_vec[duplicate], glyph))
-	  break;
+        if (usedchars[duplicate] &&
+            enc_vec[duplicate]   && !strcmp(enc_vec[duplicate], glyph))
+          break;
       }
 
       sid = cff_add_string(cffont, glyph, 1); /* FIXME */
       if (duplicate < code) { /* found duplicates */
-	cffont->encoding->supp[cffont->encoding->num_supps].code  = duplicate;
-	cffont->encoding->supp[cffont->encoding->num_supps].glyph = sid;
-	cffont->encoding->num_supps += 1;
+        cffont->encoding->supp[cffont->encoding->num_supps].code  = duplicate;
+        cffont->encoding->supp[cffont->encoding->num_supps].glyph = sid;
+        cffont->encoding->num_supps += 1;
       } else {
-	GIDMap[num_glyphs] = (card16) gid;
-	charset->data.glyphs[charset->num_entries] = sid;
-	charset->num_entries += 1;
-	if (code != prev + 1) {
-	  cffont->encoding->num_entries += 1;
-	  cffont->encoding->data.range1[cffont->encoding->num_entries-1].first  = code;
-	  cffont->encoding->data.range1[cffont->encoding->num_entries-1].n_left = 0;
-	} else {
-	  cffont->encoding->data.range1[cffont->encoding->num_entries-1].n_left += 1;
-	}
-	prev = code;
-	num_glyphs++;
+        GIDMap[num_glyphs] = (card16) gid;
+        charset->data.glyphs[charset->num_entries] = sid;
+        charset->num_entries += 1;
+        if (code != prev + 1) {
+          cffont->encoding->num_entries += 1;
+          cffont->encoding->data.range1[cffont->encoding->num_entries-1].first  = code;
+          cffont->encoding->data.range1[cffont->encoding->num_entries-1].n_left = 0;
+        } else {
+          cffont->encoding->data.range1[cffont->encoding->num_entries-1].n_left += 1;
+        }
+        prev = code;
+        num_glyphs++;
 
-	if (verbose > 2) {
-	  MESG("/%s", glyph);
-	}
-
+        if (dpx_conf.verbose_level > 2) {
+          MESG("/%s", glyph);
+        }
+#if !defined(LIBDPX)
+        /* CharSet is actually string object. */
+        {
+          texpdf_add_stream(pdfcharset, "/", 1);
+          texpdf_add_stream(pdfcharset, glyph, strlen(glyph));
+        }
+#endif /* !LIBDPX */
       }
     }
     if (cffont->encoding->num_supps > 0) {
@@ -643,7 +700,7 @@ pdf_font_load_type1 (pdf_font *font)
     cff_index *cstring;
     t1_ginfo   gm;
     card16     gid, gid_orig;
-    long       dstlen_max, srclen;
+    int        dstlen_max, srclen;
     card8     *srcptr, *dstptr;
 
     offset  = dstlen_max = 0L;
@@ -654,8 +711,8 @@ pdf_font_load_type1 (pdf_font *font)
     /* The num_glyphs increases if "seac" operators are used. */
     for (gid = 0; gid < num_glyphs; gid++) {
       if (offset + CS_STR_LEN_MAX >= dstlen_max) {
-	dstlen_max += CS_STR_LEN_MAX * 2;
-	cstring->data = RENEW(cstring->data, dstlen_max, card8);
+        dstlen_max += CS_STR_LEN_MAX * 2;
+        cstring->data = RENEW(cstring->data, dstlen_max, card8);
       }
       gid_orig = GIDMap[gid];
 
@@ -664,57 +721,71 @@ pdf_font_load_type1 (pdf_font *font)
       srclen   = cffont->cstrings->offset[gid_orig + 1] - cffont->cstrings->offset[gid_orig];
 
       offset  += t1char_convert_charstring(dstptr, CS_STR_LEN_MAX,
-					   srcptr, srclen,
-					   cffont->subrs[0], defaultwidth, nominalwidth, &gm);
+                                           srcptr, srclen,
+                                           cffont->subrs[0], defaultwidth, nominalwidth, &gm);
       cstring->offset[gid + 1] = offset + 1;
       if (gm.use_seac) {
-	long  bchar_gid, achar_gid, i;
-	const char *bchar_name, *achar_name;
+        int  bchar_gid, achar_gid, i;
+        const char *bchar_name, *achar_name;
 
-	/*
-	 * NOTE:
-	 *  1. seac.achar and seac.bchar must be contained in the CFF standard string.
-	 *  2. Those characters need not to be encoded.
-	 *  3. num_glyphs == charsets->num_entries + 1.
-	 */
-	achar_name = t1_get_standard_glyph(gm.seac.achar);
-	achar_gid  = cff_glyph_lookup(cffont, achar_name);
-	bchar_name = t1_get_standard_glyph(gm.seac.bchar);
-	bchar_gid  = cff_glyph_lookup(cffont, bchar_name);
-	if (achar_gid < 0) {
-	  WARN("Accent char \"%s\" not found. Invalid use of \"seac\" operator.",
-	       achar_name);
-	  continue;
-	}
-	if (bchar_gid < 0) {
-	  WARN("Base char \"%s\" not found. Invalid use of \"seac\" operator.",
-	       bchar_name);
-	  continue;
-	}
+        /*
+         * NOTE:
+         *  1. seac.achar and seac.bchar must be contained in the CFF standard string.
+         *  2. Those characters need not to be encoded.
+         *  3. num_glyphs == charsets->num_entries + 1.
+         */
+        achar_name = t1_get_standard_glyph(gm.seac.achar);
+        achar_gid  = cff_glyph_lookup(cffont, achar_name);
+        bchar_name = t1_get_standard_glyph(gm.seac.bchar);
+        bchar_gid  = cff_glyph_lookup(cffont, bchar_name);
+        if (achar_gid < 0) {
+          WARN("Accent char \"%s\" not found. Invalid use of \"seac\" operator.",
+               achar_name);
+          continue;
+        }
+        if (bchar_gid < 0) {
+          WARN("Base char \"%s\" not found. Invalid use of \"seac\" operator.",
+               bchar_name);
+          continue;
+        }
 
-	for (i = 0; i < num_glyphs; i++) {
-	  if (GIDMap[i] == achar_gid)
-	    break;
-	}
-	if (i == num_glyphs) {
-	  if (verbose > 2)
-	    MESG("/%s", achar_name);
-	  GIDMap[num_glyphs++] = achar_gid;
-	  charset->data.glyphs[charset->num_entries] = cff_get_seac_sid(cffont, achar_name);
-	  charset->num_entries += 1;
-	}
+        for (i = 0; i < num_glyphs; i++) {
+          if (GIDMap[i] == achar_gid)
+            break;
+        }
+        if (i == num_glyphs) {
+          if (dpx_conf.verbose_level > 2)
+            MESG("/%s", achar_name);
+          GIDMap[num_glyphs++] = achar_gid;
+          charset->data.glyphs[charset->num_entries] = cff_get_seac_sid(cffont, achar_name);
+          charset->num_entries += 1;
+#if !defined(LIBDPX)
+          /* CharSet is actually string object. */
+          {
+            texpdf_add_stream(pdfcharset, "/", 1);
+            texpdf_add_stream(pdfcharset, achar_name, strlen(achar_name));
+          }
+#endif /* !LIBDPX */
+        }
 
-	for (i = 0; i < num_glyphs; i++) {
-	  if (GIDMap[i] == bchar_gid)
-	    break;
-	}
-	if (i == num_glyphs) {
-	  if (verbose > 2)
-	    MESG("/%s", bchar_name);
-	  GIDMap[num_glyphs++] = bchar_gid;
-	  charset->data.glyphs[charset->num_entries] = cff_get_seac_sid(cffont, bchar_name);
-	  charset->num_entries += 1;
-	}
+        for (i = 0; i < num_glyphs; i++) {
+          if (GIDMap[i] == bchar_gid)
+            break;
+        }
+        if (i == num_glyphs) {
+          if (dpx_conf.verbose_level > 2)
+            MESG("/%s", bchar_name);
+          GIDMap[num_glyphs++] = bchar_gid;
+          charset->data.glyphs[charset->num_entries] = cff_get_seac_sid(cffont, bchar_name);
+          charset->num_entries += 1;
+ #if !defined(LIBDPX)
+          /* CharSet is actually string object. */
+          {
+            texpdf_add_stream(pdfcharset, "/", 1);
+            texpdf_add_stream(pdfcharset, bchar_name, strlen(bchar_name));
+          }
+#endif /* !LIBDPX */         
+        }
       }
       widths[gid] = gm.wx;
     }
@@ -731,7 +802,7 @@ pdf_font_load_type1 (pdf_font *font)
     cff_release_charsets(cffont->charsets);
     cffont->charsets = charset;
   }
-  if (verbose > 2)
+  if (dpx_conf.verbose_level > 2)
     MESG("]");
 
   /* Now we can update the String Index */
@@ -741,9 +812,17 @@ pdf_font_load_type1 (pdf_font *font)
 
   add_metrics(font, cffont, enc_vec, widths, num_glyphs);
 
+#if defined(LIBDPX)
   offset = write_fontfile(font, cffont);
-  if (verbose > 1)
+#else
+  offset = write_fontfile(font, cffont, pdfcharset);
+#endif /* LIBDPX */
+  if (dpx_conf.verbose_level > 1)
     MESG("[%u glyphs][%ld bytes]", num_glyphs, offset);
+
+#if !defined(LIBDPX)
+  texpdf_release_obj(pdfcharset);
+#endif /* LIBDPX */
 
   cff_close(cffont);
 
@@ -751,7 +830,7 @@ pdf_font_load_type1 (pdf_font *font)
   if (encoding_id < 0 && enc_vec) {
     for (code = 0; code < 256; code++) {
       if (enc_vec[code])
-	RELEASE(enc_vec[code]);
+        RELEASE(enc_vec[code]);
       enc_vec[code] = NULL;
     }
     RELEASE(enc_vec);
@@ -760,10 +839,6 @@ pdf_font_load_type1 (pdf_font *font)
     RELEASE(widths);
   if (GIDMap)
     RELEASE(GIDMap);
-
-  /*
-   * Maybe writing Charset is recommended for subsetted font.
-   */
 
   return 0;
 }

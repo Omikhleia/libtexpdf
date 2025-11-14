@@ -1,8 +1,10 @@
 /* This is dvipdfmx, an eXtended version of dvipdfm by Mark A. Wicks.
 
-    Copyright (C) 2002-2014 by Jin-Hwan Cho and Shunsaku Hirata,
+    Copyright (C) 2002-2020 by Jin-Hwan Cho and Shunsaku Hirata,
     the dvipdfmx project team.
     
+    Copyright (C) 2014-2025 by The SILE Typesetter (as libtexpdf).
+
     This program is free software; you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
     the Free Software Foundation; either version 2 of the License, or
@@ -19,13 +21,16 @@
 */
 
 #include "libtexpdf.h"
+
 #include <errno.h>
-static int verbose = 0;
-void
-texpdf_subfont_set_verbose (void)
-{
-  verbose++;
-}
+
+#include "system.h"
+#include "mem.h"
+#include "error.h"
+#include "dpxconf.h"
+#include "dpxfile.h"
+
+#include "subfont.h"
 
 /* Don't forget fontmap reading now requires information
  * from SFD files. You must initialize at least sfd_file_
@@ -158,7 +163,7 @@ read_sfd_record (struct sfd_rec_ *rec, const char *lbuf)
   const char *p = lbuf, *q;
   char  *r;
   int    repos  = 0;
-  long   c,  v1 = 0, v2 = 0;
+  int    c,  v1 = 0, v2 = 0;
   int    curpos = 0;
   int    error  = 0;
 
@@ -238,7 +243,7 @@ scan_sfd_file (struct sfd_file_ *sfd, FILE *fp)
 
   ASSERT( sfd && fp );
 
-  if (verbose > 3) {
+  if (dpx_conf.verbose_level > 3) {
     MESG("\nsubfont>> Scanning SFD file \"%s\"...\n", sfd->ident);
   }
 
@@ -259,7 +264,7 @@ scan_sfd_file (struct sfd_file_ *sfd, FILE *fp)
       sfd->sub_id = RENEW(sfd->sub_id, sfd->max_subfonts, char *);
     }
 
-    if (verbose > 3) {
+    if (dpx_conf.verbose_level > 3) {
       MESG("subfont>>   id=\"%s\" at line=\"%d\"\n", id, lpos);
     }
     sfd->sub_id[sfd->num_subfonts] = id;
@@ -271,7 +276,7 @@ scan_sfd_file (struct sfd_file_ *sfd, FILE *fp)
     sfd->rec_id[n] = -1; /* Not loaded yet. We do lazy loading of map definitions. */
   }
 
-  if (verbose > 3) {
+  if (dpx_conf.verbose_level > 3) {
     MESG("subfont>> %d entries found in SFD file \"%s\".\n", sfd->num_subfonts, sfd->ident);
   }
 
@@ -348,7 +353,7 @@ sfd_get_subfont_ids (const char *sfd_name, int *num_ids)
  * Mapping tables are actually read here.
  */
 int
-texpdf_sfd_load_record (const char *sfd_name, const char *subfont_id)
+sfd_load_record (const char *sfd_name, const char *subfont_id)
 {
   int               rec_id = -1;
   struct sfd_file_ *sfd;
@@ -375,7 +380,7 @@ texpdf_sfd_load_record (const char *sfd_name, const char *subfont_id)
     return  sfd->rec_id[i];
   }
 
-  if (verbose > 3) {
+  if (dpx_conf.verbose_level > 3) {
     MESG("\nsubfont>> Loading SFD mapping table for <%s,%s>...",
          sfd->ident, subfont_id);
   }
@@ -418,7 +423,7 @@ texpdf_sfd_load_record (const char *sfd_name, const char *subfont_id)
   sfd->rec_id[i] = rec_id;
   DPXFCLOSE(fp);
 
-  if (verbose > 3) {
+  if (dpx_conf.verbose_level > 3) {
     int __i;
     if (rec_id >= 0) {
       MESG(" at id=\"%d\"", rec_id);
@@ -438,7 +443,7 @@ texpdf_sfd_load_record (const char *sfd_name, const char *subfont_id)
 
 /* Lookup mapping table */
 unsigned short
-texpdf_lookup_sfd_record (int rec_id, unsigned char c)
+lookup_sfd_record (int rec_id, unsigned char c)
 {
   if (!sfd_record ||
        rec_id < 0 || rec_id >= num_sfd_records)
@@ -468,7 +473,7 @@ release_sfd_record (void)
 
 
 #if  DPXTEST
-/* SFD file texpdf_dumper */
+/* SFD file dumper */
 #ifdef HAVE_ICONV
 #include <iconv.h>
 #else
@@ -477,18 +482,18 @@ typedef int iconv_t;
 #include <string.h>
 
 static void
-texpdf_dump_table (const char *sfd_name, const char *sub_name, iconv_t cd)
+dump_table (const char *sfd_name, const char *sub_name, iconv_t cd)
 {
   int  rec_id, i;
 
-  rec_id = texpdf_sfd_load_record(sfd_name, sub_name);
+  rec_id = sfd_load_record(sfd_name, sub_name);
   if (rec_id < 0) {
     WARN("Could not load SFD mapping for \"%s\"", sub_name);
     return;
   }
   fprintf(stdout, "  <subfont id=\"%s\">\n", sub_name);
   for (i = 0; i < 256; i++) {
-    unsigned short c = texpdf_lookup_sfd_record(rec_id, i);
+    unsigned short c = lookup_sfd_record(rec_id, i);
     char    *p, inbuf[2];
     char    *q, outbuf[32];
     size_t   r, inbufleft = 2, outbufleft = 32;
@@ -504,7 +509,7 @@ texpdf_dump_table (const char *sfd_name, const char *sub_name, iconv_t cd)
 #ifdef HAVE_ICONV
         r = iconv(cd, &p, &inbufleft, &q, &outbufleft);
         if (r == -1) {
-          if (verbose) {
+          if (dpx_conf.verbose_level > 0) {
             WARN("Conversion to Unicode failed for subfont-id=\"%s\" code=\"0x%02x\"",
                  sub_name, i);
             WARN(">> with: %s", strerror(errno));
@@ -550,7 +555,7 @@ test_subfont_help (void)
   fprintf(stdout, "  It must be an encoding name recognized by iconv.\n");
   fprintf(stdout, "  With this option write Unicode character in auxiliary attribute 'uc'.\n");
   fprintf(stdout, "-s, --subfont-id string\n");
-  fprintf(stdout, "  Load and texpdf_dump mapping table only for subfont 'string'.\n");
+  fprintf(stdout, "  Load and dump mapping table only for subfont 'string'.\n");
 }
 
 int
@@ -626,10 +631,10 @@ test_subfont_main (int argc, char *argv[])
       WARN("Could not open SFD file: %s", sfd_name);
     else {
       for (i = 0; i < num_ids; i++)
-        texpdf_dump_table(sfd_name, sub_id[i], cd);
+        dump_table(sfd_name, sub_id[i], cd);
     }
   } else {
-    texpdf_dump_table(sfd_name, sub_name, cd);
+    dump_table(sfd_name, sub_name, cd);
   }
   fprintf(stdout, "</subfontDefinition>\n");
 

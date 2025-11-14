@@ -1,8 +1,10 @@
 /* This is dvipdfmx, an eXtended version of dvipdfm by Mark A. Wicks.
 
-    Copyright (C) 2002-2014 by Jin-Hwan Cho and Shunsaku Hirata,
+    Copyright (C) 2002-2020 by Jin-Hwan Cho and Shunsaku Hirata,
     the dvipdfmx project team.
     
+    Copyright (C) 2014-2025 by The SILE Typesetter (as libtexpdf).
+
     This program is free software; you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
     the Free Software Foundation; either version 2 of the License, or
@@ -19,6 +21,16 @@
 */
 
 #include "libtexpdf.h"
+
+#include <stdio.h>
+
+#include "system.h"
+#include "error.h"
+#include "mem.h"
+#include "mfileio.h"
+
+#include "sfnt.h"
+#include "tt_table.h"
 
 /*
   tables contains information refered by other tables
@@ -412,7 +424,7 @@ tt_read_os2__table (sfnt *sfont)
   return table;
 }
 
-USHORT
+static USHORT
 tt_get_name (sfnt *sfont, char *dest, USHORT destlen,
 	     USHORT plat_id, USHORT enco_id,
 	     USHORT lang_id, USHORT name_id)
@@ -420,9 +432,12 @@ tt_get_name (sfnt *sfont, char *dest, USHORT destlen,
   USHORT length = 0;
   USHORT num_names, string_offset;
   ULONG  name_offset;
-  int    i;
+  int    i, j;
+  int    is_utf16_be;
 
   name_offset = sfnt_locate_table (sfont, "name");
+  is_utf16_be = (plat_id == 3) && (enco_id == 1) &&
+                (lang_id == 0x0409u) && (name_id == 6);
 
   if (sfnt_get_ushort(sfont)) 
     ERROR ("Expecting zero");
@@ -441,13 +456,23 @@ tt_get_name (sfnt *sfont, char *dest, USHORT destlen,
     offset = sfnt_get_ushort(sfont);
     /* language ID value 0xffffu for `accept any language ID' */
     if ((p_id == plat_id) && (e_id == enco_id) &&
-	(lang_id == 0xffffu || l_id == lang_id) && (n_id == name_id)) {
+        (lang_id == 0xffffu || l_id == lang_id) && (n_id == name_id)) {
+      if (is_utf16_be) {
+          length /= 2;
+      }
       if (length > destlen - 1) {
-	WARN ("Name string too long (%u), truncating to %u", length, destlen);
-	length = destlen - 1;
+        WARN ("Name string too long (%u), truncating to %u", length, destlen);
+        length = destlen - 1;
       }
       sfnt_seek_set (sfont, name_offset+string_offset+offset);
-      sfnt_read((unsigned char*)dest, length, sfont);
+      if (is_utf16_be) {
+        for (j=0;j<length;j++) {
+          dest[j] = (unsigned char)(sfnt_get_ushort(sfont) & 0x00FF);
+        }
+      }
+      else {
+        sfnt_read((unsigned char*)dest, length, sfont);
+      }
       dest[length] = '\0';
       break;
     }

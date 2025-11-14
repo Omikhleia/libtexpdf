@@ -1,9 +1,11 @@
 /* This is dvipdfmx, an eXtended version of dvipdfm by Mark A. Wicks.
 
-    Copyright (C) 2002-2014 by Jin-Hwan Cho and Shunsaku Hirata,
+    Copyright (C) 2002-2020 by Jin-Hwan Cho and Shunsaku Hirata,
     the dvipdfmx project team.
     
     Copyright (C) 1998, 1999 by Mark A. Wicks <mwicks@kettering.edu>
+
+    Copyright (C) 2014-2025 by The SILE Typesetter (as libtexpdf).
 
     This program is free software; you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -27,6 +29,20 @@
 /* pow() */
 #include <math.h>
 
+#include "system.h"
+#include "mem.h"
+#include "error.h"
+
+#include "numbers.h"
+
+#include "mfileio.h"
+
+#include "pdfobj.h"
+#include "pdfdoc.h"
+#include "pdfdev.h"
+
+#include "pdfparse.h"
+
 /* PDF */
 #ifdef  is_space
 #undef  is_space
@@ -37,7 +53,8 @@
 
 #define is_space(c) ((c) == ' '  || (c) == '\t' || (c) == '\f' || \
 		     (c) == '\r' || (c) == '\n' || (c) == '\0')
-#define is_delim(c) ((c) == '(' || (c) == '/' || \
+#define is_delim(c) ((c) == '(' || (c) == ')' || \
+                     (c) == '/' || \
                      (c) == '<' || (c) == '>' || \
 		     (c) == '[' || (c) == ']' || \
                      (c) == '%')
@@ -51,10 +68,10 @@ static struct {
   0
 };
 
-extern int xtoi (char ch);
+static int xtoi (char ch);
 
 void
-texpdf_dump (const char *start, const char *end)
+dump (const char *start, const char *end)
 {
   const char *p = start;
 
@@ -67,16 +84,8 @@ texpdf_dump (const char *start, const char *end)
   MESG("<--\n");
 }
 
-#define SAVE(s,e) do {\
-   save = (s);\
- } while (0)
-#define DUMP_RESTORE(s,e) do {\
-   texpdf_dump(save, end);\
-   (s) = save;\
- } while (0)
-
 void
-skip_line (const char **start, const char *end)
+pdfparse_skip_line (const char **start, const char *end)
 {
   while (*start < end && **start != '\n' && **start != '\r')
     (*start)++;
@@ -102,7 +111,7 @@ texpdf_skip_white (const char **start, const char *end)
    */
   while (*start < end && (is_space(**start) || **start == '%')) {
     if (**start == '%')
-      skip_line(start, end);
+      pdfparse_skip_line(start, end);
     else
       (*start)++;
   }
@@ -547,12 +556,24 @@ texpdf_parse_pdf_literal_string (const char **pp, const char *endptr)
 /*
  * PDF Hex String
  */
+static int
+xtoi (char ch)
+{
+  if (ch >= '0' && ch <= '9')
+    return ch - '0';
+  if (ch >= 'A' && ch <= 'F')
+    return (ch - 'A') + 10;
+  if (ch >= 'a' && ch <= 'f')
+    return (ch - 'a') + 10;
+
+  return -1;
+}
 
 static pdf_obj *
 texpdf_parse_pdf_hex_string (const char **pp, const char *endptr)
 {
   const char  *p;
-  long   len;
+  int   len;
 
   p = *pp;
 
@@ -615,28 +636,12 @@ texpdf_parse_pdf_string (const char **pp, const char *endptr)
   return NULL;
 }
 
-#ifndef PDF_PARSE_STRICT
-pdf_obj *
-texpdf_parse_texpdf_tainted_dict (const char **pp, const char *endptr)
-{
-  pdf_obj *result;
-
-  parser_state.tainted = 1;
-  result  = texpdf_parse_pdf_dict(pp, endptr, NULL);
-  parser_state.tainted = 0;
-
-  return result;
-}
-#else /* PDF_PARSE_STRICT */
-pdf_obj *
-texpdf_parse_texpdf_tainted_dict (const char **pp, const char *endptr)
-{
-  return texpdf_parse_pdf_dict(pp, endptr, NULL);
-}
-#endif /* !PDF_PARSE_STRICT */
-
-pdf_obj *
-texpdf_parse_pdf_dict (const char **pp, const char *endptr, pdf_file *pf)
+static pdf_obj *
+parse_pdf_dict_extended (const char **pp, const char *endptr, pdf_file *pf,
+                         pdf_obj* (*unknown_handler) (const char **pp,
+                                                      const char *endptr,
+                                                      void *user_data),
+                         void *user_data)
 {
   pdf_obj *result = NULL;
   const char *p;
@@ -668,7 +673,7 @@ texpdf_parse_pdf_dict (const char **pp, const char *endptr, pdf_file *pf)
 
     texpdf_skip_white(&p, endptr);
 
-    value = texpdf_parse_pdf_object(&p, endptr, pf);
+    value = texpdf_parse_pdf_object_extended(&p, endptr, pf, unknown_handler, user_data);
     if (!value) {
       texpdf_release_obj(key); 
       texpdf_release_obj(value);
@@ -692,8 +697,12 @@ texpdf_parse_pdf_dict (const char **pp, const char *endptr, pdf_file *pf)
   return result;
 }
 
-pdf_obj *
-texpdf_parse_pdf_array (const char **pp, const char *endptr, pdf_file *pf)
+static pdf_obj *
+parse_pdf_array_extended (const char **pp, const char *endptr, pdf_file *pf,
+                          pdf_obj* (*unknown_handler) (const char **pp,
+                                                       const char *endptr,
+                                                       void *user_data),
+                          void *user_data)
 {
   pdf_obj *result;
   const char *p;
@@ -714,7 +723,7 @@ texpdf_parse_pdf_array (const char **pp, const char *endptr, pdf_file *pf)
   while (p < endptr && p[0] != ']') {
     pdf_obj *elem;
 
-    elem = texpdf_parse_pdf_object(&p, endptr, pf);
+    elem = texpdf_parse_pdf_object_extended(&p, endptr, pf, unknown_handler, user_data);
     if (!elem) {
       texpdf_release_obj(result); 
       WARN("Could not find a valid object in array object.");
@@ -741,7 +750,7 @@ texpdf_parse_pdf_stream (const char **pp, const char *endptr, pdf_obj *dict)
   pdf_obj *result = NULL;
   const char *p;
   pdf_obj *stream_dict;
-  long     stream_length;
+  int      stream_length;
 
   p = *pp;
   texpdf_skip_white(&p, endptr);
@@ -776,7 +785,7 @@ texpdf_parse_pdf_stream (const char **pp, const char *endptr, pdf_obj *dict)
       if (texpdf_obj_typeof(tmp2) != PDF_NUMBER)
         stream_length = -1;
       else {
-        stream_length = (long) texpdf_number_value(tmp2);
+        stream_length = (int) texpdf_number_value(tmp2);
       }
       texpdf_release_obj(tmp2);
     }
@@ -834,11 +843,10 @@ texpdf_parse_pdf_stream (const char **pp, const char *endptr, pdf_obj *dict)
   return  result;
 }
 
-
 static pdf_obj *
 try_pdf_reference (const char *start, const char *end, const char **endptr, pdf_file *pf)
 {
-  unsigned long id = 0;
+  unsigned id = 0;
   unsigned short gen = 0;
 
   ASSERT(pf);
@@ -882,7 +890,11 @@ try_pdf_reference (const char *start, const char *end, const char **endptr, pdf_
 }
 
 pdf_obj *
-texpdf_parse_pdf_object (const char **pp, const char *endptr, pdf_file *pf)
+texpdf_parse_pdf_object_extended (const char **pp, const char *endptr, pdf_file *pf,
+                           pdf_obj* (*unknown_handler) (const char **pp,
+                                                        const char *endptr,
+                                                        void *user_data),
+                           void *user_data)
 /* If pf is NULL, then indirect references are not allowed */
 {
   pdf_obj *result = NULL;
@@ -903,7 +915,7 @@ texpdf_parse_pdf_object (const char **pp, const char *endptr, pdf_file *pf)
     } else {
       pdf_obj *dict;
 
-      result = texpdf_parse_pdf_dict(pp, endptr, pf);
+      result = parse_pdf_dict_extended(pp, endptr, pf, unknown_handler, user_data);
       texpdf_skip_white(pp, endptr);
       if ( result &&
           *pp <= endptr - 15 &&
@@ -919,7 +931,7 @@ texpdf_parse_pdf_object (const char **pp, const char *endptr, pdf_file *pf)
     result = texpdf_parse_pdf_string(pp, endptr);
     break;
   case '[':
-    result = texpdf_parse_pdf_array(pp, endptr, pf);
+    result = parse_pdf_array_extended(pp, endptr, pf, unknown_handler, user_data);
     break;
   case '/':
     result = texpdf_parse_pdf_name(pp, endptr);
@@ -947,13 +959,50 @@ texpdf_parse_pdf_object (const char **pp, const char *endptr, pdf_file *pf)
     }
     break;
 
-  case '@':
-    break;
-
   default:
-    WARN("Unknown PDF object type.");
-    result = NULL;
+    if (unknown_handler) {
+      result = unknown_handler(pp, endptr, user_data);
+    } else {
+      WARN("Unknown PDF object type.");
+      result = NULL;
+    }
+    break;
   }
+
+  return result;
+}
+
+pdf_obj *
+texpdf_parse_pdf_dict (const char **pp, const char *endptr, pdf_file *pf)
+{
+  return parse_pdf_dict_extended(pp, endptr, pf, NULL, NULL);
+}
+
+pdf_obj *
+texpdf_parse_pdf_array (const char **pp, const char *endptr, pdf_file *pf)
+{
+  return parse_pdf_array_extended(pp, endptr, pf, NULL, NULL);
+}
+
+pdf_obj *
+texpdf_parse_pdf_object (const char **pp, const char *endptr, pdf_file *pf)
+{
+  return texpdf_parse_pdf_object_extended(pp, endptr, pf, NULL, NULL);
+}
+
+
+pdf_obj *
+texpdf_parse_pdf_tainted_dict (const char **pp, const char *endptr,
+                        pdf_obj* (*unknown_handler) (const char **pp,
+                                                     const char *endptr,
+                                                     void *user_data),
+                        void *user_data)
+{
+  pdf_obj *result;
+
+  parser_state.tainted = 1;
+  result  = parse_pdf_dict_extended(pp, endptr, NULL, unknown_handler, user_data);
+  parser_state.tainted = 0;
 
   return result;
 }

@@ -1,7 +1,9 @@
 /* This is dvipdfmx, an eXtended version of dvipdfm by Mark A. Wicks.
 
-    Copyright (C) 2002-2014 by Jin-Hwan Cho and Shunsaku Hirata,
+    Copyright (C) 2002-2020 by Jin-Hwan Cho and Shunsaku Hirata,
     the dvipdfmx project team.
+
+    Copyright (C) 2014-2025 by The SILE Typesetter (as libtexpdf).
 
     This program is free software; you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -33,27 +35,23 @@
  *
  * TODO:
  *   Only cid(range|char) allowed for CODE_TO_CID and bf(range|char) for CID_TO_CODE ?
+ * 
  */
 
 #include "libtexpdf.h"
 
 #include <string.h>
 
+#include "system.h"
 #include "mem.h"
 #include "error.h"
+#include "dpxconf.h"
 #include "dpxutil.h"
 
 #include "cmap_p.h"
 #include "cmap.h"
 
-static int __verbose = 0;
 static int __silent  = 0;
-
-void
-CMap_set_verbose (void)
-{
-  __verbose++;
-}
 
 void
 CMap_set_silent (int value)
@@ -62,14 +60,14 @@ CMap_set_silent (int value)
 }
 
 /* Private funcs. */
-static int  bytes_consumed   (CMap *cmap, const unsigned char *instr, long inbytes);
+static int  bytes_consumed   (CMap *cmap, const unsigned char *instr, int inbytes);
 static void handle_undefined (CMap *cmap,
-			      const unsigned char **inbuf, long *inbytesleft,
-			      unsigned char **outbuf, long *outbytesleft);
+                              const unsigned char **inbuf, int *inbytesleft,
+                              unsigned char **outbuf, int *outbytesleft);
 
 static int  check_range      (CMap *cmap,
-			      const unsigned char *srclo, const unsigned char *srchi, int srcdim,
-			      const unsigned char *dst, int dstdim);
+                              const unsigned char *srclo, const unsigned char *srchi, int srcdim,
+                              const unsigned char *dst, int dstdim);
 
 static unsigned char *get_mem (CMap *cmap, int size);
 static mapDef *mapDef_new     (void);
@@ -88,10 +86,10 @@ CMap_new (void)
   cmap->useCMap  = NULL;
   cmap->CSI      = NULL;
 
-  cmap->profile.minBytesIn  = 2;
-  cmap->profile.maxBytesIn  = 2;
-  cmap->profile.minBytesOut = 2;
-  cmap->profile.maxBytesOut = 2;
+  cmap->profile.minBytesIn  = 65535;
+  cmap->profile.maxBytesIn  = 0;
+  cmap->profile.minBytesOut = 65535;
+  cmap->profile.maxBytesOut = 0;
 
   cmap->flags = 0;
 
@@ -105,9 +103,6 @@ CMap_new (void)
   cmap->mapData->prev = NULL;
   cmap->mapData->pos  = 0;
   cmap->mapData->data = NEW(MEM_ALLOC_SIZE, unsigned char);
-
-  cmap->reverseMap = NEW(65536, int);
-  memset(cmap->reverseMap, 0, 65536 * sizeof(int));
 
   return cmap;
 }
@@ -134,14 +129,11 @@ CMap_release (CMap *cmap)
     while (map != NULL) {
       mapData *prev = map->prev;
       if (map->data != NULL)
-	RELEASE(map->data);
+        RELEASE(map->data);
       RELEASE(map);
       map = prev;
     }
   }
-
-  if (cmap->reverseMap)
-    RELEASE(cmap->reverseMap);
 
   RELEASE(cmap);
 }
@@ -179,9 +171,9 @@ CMap_is_valid (CMap *cmap)
     csi1 = CMap_get_CIDSysInfo(cmap);
     csi2 = CMap_get_CIDSysInfo(cmap->useCMap);
     if (strcmp(csi1->registry, csi2->registry) ||
-	strcmp(csi1->ordering, csi2->ordering)) {
+      strcmp(csi1->ordering, csi2->ordering)) {
       WARN("CIDSystemInfo mismatched %s <--> %s",
-	   CMap_get_name(cmap), CMap_get_name(cmap->useCMap));
+           CMap_get_name(cmap), CMap_get_name(cmap->useCMap));
       return 0;
     }
   }
@@ -220,10 +212,10 @@ CMap_get_profile (CMap *cmap, int type)
  */
 static void
 handle_undefined (CMap *cmap,
-		  const unsigned char **inbuf,  long *inbytesleft,
-		  unsigned char **outbuf, long *outbytesleft)
+                  const unsigned char **inbuf,  int *inbytesleft,
+                  unsigned char **outbuf, int *outbytesleft)
 {
-  long len = 0;
+  int len = 0;
 
   if (*outbytesleft < 2)
     ERROR("%s: Buffer overflow.", CMAP_DEBUG_STR);
@@ -251,13 +243,13 @@ handle_undefined (CMap *cmap,
 
 void
 CMap_decode_char (CMap *cmap,
-		  const unsigned char **inbuf, long *inbytesleft,
-		  unsigned char **outbuf, long *outbytesleft)
+                  const unsigned char **inbuf, int *inbytesleft,
+                  unsigned char **outbuf, int *outbytesleft)
 {
   mapDef *t;
   const unsigned char *p, *save;
   unsigned char c = 0;
-  long    count = 0;
+  int     count = 0;
 
   p = save = *inbuf;
   /*
@@ -326,9 +318,9 @@ CMap_decode_char (CMap *cmap,
       /* continue */
     case MAP_IS_CID: case MAP_IS_CODE:
       if (*outbytesleft >= t[c].len)
-	memcpy(*outbuf, t[c].code, t[c].len);
+        memcpy(*outbuf, t[c].code, t[c].len);
       else
-	ERROR("%s: Buffer overflow.", CMAP_DEBUG_STR);
+        ERROR("%s: Buffer overflow.", CMAP_DEBUG_STR);
       *outbuf       += t[c].len;
       *outbytesleft -= t[c].len;
       break;
@@ -347,10 +339,10 @@ CMap_decode_char (CMap *cmap,
 /*
  * For convenience, it does not do decoding to CIDs.
  */
-long
-texpdf_CMap_decode (CMap *cmap,
-	     const unsigned char **inbuf,  long *inbytesleft,
-	     unsigned char **outbuf, long *outbytesleft)
+int
+CMap_decode (CMap *cmap,
+             const unsigned char **inbuf,  int *inbytesleft,
+             unsigned char **outbuf, int *outbytesleft)
 {
   int count;
 
@@ -360,14 +352,6 @@ texpdf_CMap_decode (CMap *cmap,
     CMap_decode_char(cmap, inbuf, inbytesleft, outbuf, outbytesleft);
 
   return count;
-}
-
-int
-CMap_reverse_decode(CMap *cmap, CID cid) {
-  int ch = cmap->reverseMap ? cmap->reverseMap[cid] : -1;
-  if (ch == 0 && cmap->useCMap)
-    return CMap_reverse_decode(cmap->useCMap, cid);
-  return ch;
 }
 
 char *
@@ -461,7 +445,7 @@ CMap_set_usecmap (CMap *cmap, CMap *ucmap)
 
   if (cmap == ucmap)
     ERROR("%s: Identical CMap object cannot be used for usecmap CMap: 0x%p=0x%p",
-	  CMAP_DEBUG_STR, cmap, ucmap);
+          CMAP_DEBUG_STR, cmap, ucmap);
 
   /* Check if ucmap have neccesary information. */
   if (!CMap_is_valid(ucmap))
@@ -473,13 +457,13 @@ CMap_set_usecmap (CMap *cmap, CMap *ucmap)
    */
   if (cmap->name && strcmp(cmap->name, ucmap->name) == 0)
     ERROR("%s: CMap refering itself not allowed: CMap %s --> %s",
-	  CMAP_DEBUG_STR, cmap->name, ucmap->name);
+          CMAP_DEBUG_STR, cmap->name, ucmap->name);
 
   if (cmap->CSI && cmap->CSI->registry && cmap->CSI->ordering) {
     if (strcmp(cmap->CSI->registry, ucmap->CSI->registry) ||
-	strcmp(cmap->CSI->ordering, ucmap->CSI->ordering))
+        strcmp(cmap->CSI->ordering, ucmap->CSI->ordering))
       ERROR("%s: CMap %s required by %s have different CSI.",
-	    CMAP_DEBUG_STR, CMap_get_name(cmap), CMap_get_name(ucmap));
+            CMAP_DEBUG_STR, CMap_get_name(cmap), CMap_get_name(ucmap));
   }
 
   /* We must copy codespaceranges. */
@@ -492,7 +476,7 @@ CMap_set_usecmap (CMap *cmap, CMap *ucmap)
 }
 
 /* Test the validity of character c. */
-int
+static int
 CMap_match_codespace (CMap *cmap, const unsigned char *c, int dim)
 {
   int i, pos;
@@ -504,7 +488,7 @@ CMap_match_codespace (CMap *cmap, const unsigned char *c, int dim)
       continue;
     for (pos = 0; pos < dim; pos++) {
       if (c[pos] > csr->codeHi[pos] || c[pos] < csr->codeLo[pos])
-	break;
+        break;
     }
     if (pos == dim)
       return 0; /* Valid */
@@ -530,10 +514,10 @@ CMap_add_codespacerange (CMap *cmap,
     csr = cmap->codespace.ranges + i;
     for (j = 0; j < MIN(csr->dim, dim) && overlap; j++) {
       if ((codelo[j] >= csr->codeLo[j] && codelo[j] <= csr->codeHi[j]) ||
-	  (codehi[j] >= csr->codeLo[j] && codehi[j] <= csr->codeHi[j]))
-	overlap = 1;
+          (codehi[j] >= csr->codeLo[j] && codehi[j] <= csr->codeHi[j]))
+        overlap = 1;
       else
-	overlap = 0;
+        overlap = 0;
     }
     if (overlap) {
       WARN("Overlapping codespace found. (ingored)");
@@ -592,7 +576,7 @@ CMap_add_notdefrange (CMap *cmap,
   for (c = srclo[srcdim-1]; c <= srchi[srcdim-1]; c++) {
     if (MAP_DEFINED(cur[c].flag)) {
       if (!__silent)
-	WARN("Trying to redefine already defined code mapping. (ignored)");
+        WARN("Trying to redefine already defined code mapping. (ignored)");
     } else {
       cur[c].flag = (MAP_LOOKUP_END|MAP_IS_NOTDEF);
       cur[c].code = get_mem(cmap, 2);
@@ -608,16 +592,16 @@ CMap_add_notdefrange (CMap *cmap,
 
 int
 CMap_add_bfchar (CMap *cmap,
-		 const unsigned char *src, int srcdim,
-		 const unsigned char *dst, int dstdim)
+                 const unsigned char *src, int srcdim,
+                 const unsigned char *dst, int dstdim)
 {
   return CMap_add_bfrange(cmap, src, src, srcdim, dst, dstdim);
 }
 
 int
 CMap_add_bfrange (CMap *cmap,
-		  const unsigned char *srclo, const unsigned char *srchi, int srcdim,
-		  const unsigned char *base, int dstdim)
+                  const unsigned char *srclo, const unsigned char *srchi, int srcdim,
+                  const unsigned char *base, int dstdim)
 {
   int     c, last_byte, i;
   mapDef *cur;
@@ -693,20 +677,16 @@ CMap_add_cidrange (CMap *cmap,
   for (v = 0, i = 0; i < srcdim - 1; i++)
     v = (v << 8) + srclo[i];
 
-  cmap->reverseMap[base] = v;
-
   for (c = srclo[srcdim-1]; c <= srchi[srcdim-1]; c++) {
     if (cur[c].flag != 0) {
       if (!__silent)
-	WARN("Trying to redefine already defined CID mapping. (ignored)");
+        WARN("Trying to redefine already defined CID mapping. (ignored)");
     } else {
       cur[c].flag = (MAP_LOOKUP_END|MAP_IS_CID);
       cur[c].len  = 2;
       cur[c].code = get_mem(cmap, 2);
       cur[c].code[0] = base >> 8;
       cur[c].code[1] = base & 0xff;
-
-      cmap->reverseMap[base] = (v << 8) + c;
     }
     if (base >= CID_MAX)
       WARN("CID number too large.");
@@ -791,10 +771,10 @@ locate_tbl (mapDef **cur, const unsigned char *code, int dim)
 /*
  * Guess how many bytes consumed as a `single' character:
  * Substring of length bytesconsumed bytes of input string is interpreted as
- * a `single' character by texpdf_CMap_decode().
+ * a `single' character by CMap_decode().
  */
 static int
-bytes_consumed (CMap *cmap, const unsigned char *instr, long inbytes)
+bytes_consumed (CMap *cmap, const unsigned char *instr, int inbytes)
 {
   int i, pos, longest = 0, bytesconsumed;
 
@@ -803,7 +783,7 @@ bytes_consumed (CMap *cmap, const unsigned char *instr, long inbytes)
     rangeDef *csr = cmap->codespace.ranges + i;
     for (pos = 0; pos < MIN(csr->dim, inbytes); pos++) {
       if (instr[pos] > csr->codeHi[pos] || instr[pos] < csr->codeLo[pos])
-	break;
+        break;
     }
     if (pos == csr->dim) /* part of instr is totally valid in this codespace. */
       return csr->dim;
@@ -818,7 +798,7 @@ bytes_consumed (CMap *cmap, const unsigned char *instr, long inbytes)
     for (i = 0; i< cmap->codespace.num; i++) {
       rangeDef *csr = cmap->codespace.ranges + i;
       if (csr->dim > longest && csr->dim < bytesconsumed)
-	bytesconsumed = csr->dim;
+        bytesconsumed = csr->dim;
     }
   }
 
@@ -827,8 +807,8 @@ bytes_consumed (CMap *cmap, const unsigned char *instr, long inbytes)
 
 static int
 check_range (CMap *cmap,
-	     const unsigned char *srclo, const unsigned char *srchi, int srcdim,
-	     const unsigned char *dst, int dstdim)
+             const unsigned char *srclo, const unsigned char *srchi, int srcdim,
+             const unsigned char *dst, int dstdim)
 {
   if ((srcdim < 1 || dstdim < 1) ||
       (!srclo || !srchi || !dst) ||
@@ -912,14 +892,14 @@ CMap_cache_init (void)
 }
 
 CMap *
-texpdf_CMap_cache_get (int id)
+CMap_cache_get (int id)
 {
   CHECK_ID(id);
   return __cache->cmaps[id];
 }
 
 int
-texpdf_CMap_cache_find (const char *cmap_name)
+CMap_cache_find (const char *cmap_name)
 {
   int   id = 0;
   FILE *fp = NULL;
@@ -946,7 +926,7 @@ texpdf_CMap_cache_find (const char *cmap_name)
     return -1;
   }
      
-  if (__verbose)
+  if (dpx_conf.verbose_level > 0)
     MESG("(CMap:%s", cmap_name);
 
   if (__cache->num >= __cache->max) {
@@ -962,7 +942,7 @@ texpdf_CMap_cache_find (const char *cmap_name)
 
   DPXFCLOSE(fp);
 
-  if (__verbose)
+  if (dpx_conf.verbose_level > 0)
     MESG(")");
 
   return id;

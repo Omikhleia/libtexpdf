@@ -1,9 +1,11 @@
 /* This is dvipdfmx, an eXtended version of dvipdfm by Mark A. Wicks.
 
-    Copyright (C) 2002-2014 by Jin-Hwan Cho and Shunsaku Hirata,
+    Copyright (C) 2002-2020 by Jin-Hwan Cho and Shunsaku Hirata,
     the dvipdfmx project team.
     
     Copyright (C) 1998, 1999 by Mark A. Wicks <mwicks@kettering.edu>
+
+    Copyright (C) 2014-2025 by The SILE Typesetter (as libtexpdf).
 
     This program is free software; you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -21,6 +23,11 @@
 */
 
 #include "libtexpdf.h"
+
+#include "system.h"	
+#include "error.h"
+#include "mfileio.h"
+#include "numbers.h"
 
 unsigned char get_unsigned_byte (FILE *file)
 {
@@ -162,4 +169,3 @@ int32_t sqxfw (int32_t sq, fixword fw)
   result += j << 28;
   return (sign > 0) ? result : -result;
 }
-

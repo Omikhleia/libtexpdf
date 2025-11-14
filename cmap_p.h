@@ -1,7 +1,9 @@
 /* This is dvipdfmx, an eXtended version of dvipdfm by Mark A. Wicks.
 
-    Copyright (C) 2002-2014 by Jin-Hwan Cho and Shunsaku Hirata,
+    Copyright (C) 2002-2020 by Jin-Hwan Cho and Shunsaku Hirata,
     the dvipdfmx project team.
+
+    Copyright (C) 2014-2025 by The SILE Typesetter (as libtexpdf).
 
     This program is free software; you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -61,9 +63,9 @@ typedef struct mapDef {
 
 #define MEM_ALLOC_SIZE  4096
 typedef struct mapData {
-  long            pos;  /* Position of next free data segment */
   unsigned char  *data; /* CID, Code... MEM_ALLOC_SIZE bytes  */
   struct mapData *prev; /* Previous mapData data segment      */
+  int             pos;  /* Position of next free data segment */
 } mapData;
 
 struct CMap {
@@ -96,8 +98,6 @@ struct CMap {
     int minBytesOut;
     int maxBytesOut;
   } profile;
-
-  int *reverseMap;
 };
 
 #endif /* _CMAP_P_H_ */

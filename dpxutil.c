@@ -1,9 +1,11 @@
 /* This is dvipdfmx, an eXtended version of dvipdfm by Mark A. Wicks.
 
-    Copyright (C) 2002-2014 by Jin-Hwan Cho and Shunsaku Hirata,
+    Copyright (C) 2002-2023 by Jin-Hwan Cho and Shunsaku Hirata,
     the dvipdfmx project team.
 
     Copyright (C) 1998, 1999 by Mark A. Wicks <mwicks@kettering.edu>
+
+    Copyright (C) 2014-2025 by The SILE Typesetter (as libtexpdf).
 
     This program is free software; you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -20,9 +22,7 @@
     Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA.
 */
 
-#ifdef HAVE_CONFIG_H
-#include <config.h>
-#endif
+#include "libtexpdf.h"
 
 #include <stdarg.h>
 #include <stdio.h>
@@ -30,6 +30,7 @@
 #include <string.h>
 #include <time.h>
 
+#include "system.h"
 #include "mem.h"
 #include "error.h"
 
@@ -48,107 +49,207 @@ xtoi (char c)
     return -1;
 }
 
-int
-sputx (unsigned char c, char **s, char *end)
+double
+min4 (double x1, double x2, double x3, double x4)
 {
-  char hi = (c >> 4), lo = c & 0x0f;
-
-  if (*s + 2 > end)
-    ERROR("Buffer overflow.");
-  **s = (hi < 10) ? hi + '0' : hi + '7';
-  *(*s+1) = (lo < 10) ? lo + '0' : lo + '7';
-  *s += 2;
-
-  return 2;
+  double v = x1;
+  if (x2 < v) v = x2;
+  if (x3 < v) v = x3;
+  if (x4 < v) v = x4;
+  return v;
 }
 
-int
-getxpair (unsigned char **s)
+double
+max4 (double x1, double x2, double x3, double x4)
 {
-  int hi, lo;
-  hi = xtoi(**s);
-  if (hi < 0)
-    return hi;
-  (*s)++;
-  lo = xtoi(**s);
-  if (lo < 0)
-    return lo;
-  (*s)++;
-  return ((hi << 4)| lo);
+  double v = x1;
+  if (x2 > v) v = x2;
+  if (x3 > v) v = x3;
+  if (x4 > v) v = x4;
+  return v;
 }
 
-int
-putxpair (unsigned char c, char **s)
+/* Duplicate from pdfparse.c */
+static void
+texpdf_skip_white (const char **pp, const char *endptr)
 {
-  char hi = (c >> 4), lo = c & 0x0f;
-
-  **s = (hi < 10) ? hi + '0' : hi + '7';
-  *(*s+1) = (lo < 10) ? lo + '0' : lo + '7';
-  *s += 2;
-
-  return 2;
-}
-
-/* Overflowed value is set to invalid char.  */
-unsigned char
-ostrtouc (unsigned char **inbuf, unsigned char *inbufend, unsigned char *valid)
-{
-  unsigned char *cur = *inbuf;
-  unsigned int   val = 0;
-
-  while (cur < inbufend && cur < *inbuf + 3 &&
-	 (*cur >= '0' && *cur <= '7')) {
-    val = (val << 3) | (*cur - '0');
-    cur++;
+  while (*pp < endptr &&
+         (**pp == ' '  || **pp == '\t' || **pp == '\f' ||
+          **pp == '\r' || **pp == '\n' || **pp == '\0')) {
+    (*pp)++;
   }
-  if (val > 255 || cur == *inbuf)
-    *valid = 0;
-  else
-    *valid = 1;
-
-  *inbuf = cur;
-  return (unsigned char) val;
 }
 
-unsigned char
-esctouc (unsigned char **inbuf, unsigned char *inbufend, unsigned char *valid)
+/* This need to allow 'true' prefix for unit and length value must be divided
+ * by current magnification.
+ */
+int
+dpx_util_read_length (double *vp, double mag, const char **pp, const char *endptr)
 {
-  unsigned char unescaped, escaped;
+  char   *q;
+  const char *p = *pp;
+  double  v, u = 1.0;
+  const char *_ukeys[] = {
+#define K_UNIT__PT  0
+#define K_UNIT__IN  1
+#define K_UNIT__CM  2
+#define K_UNIT__MM  3
+#define K_UNIT__BP  4
+#define K_UNIT__PC  5
+#define K_UNIT__DD  6
+#define K_UNIT__CC  7
+#define K_UNIT__SP  8
+    "pt", "in", "cm", "mm", "bp", "pc", "dd", "cc", "sp",
+     NULL
+  };
+  int     k, error = 0;
 
-  escaped = **inbuf;
-  *valid    = 1;
-  switch (escaped) {
-    /* Backslash, unbalanced paranthes */
-  case '\\': case ')': case '(':
-    unescaped = escaped;
-    (*inbuf)++;
-    break;
-    /* Other escaped char */ 
-  case 'n': unescaped = '\n'; (*inbuf)++; break;
-  case 'r': unescaped = '\r'; (*inbuf)++; break;
-  case 't': unescaped = '\t'; (*inbuf)++; break;
-  case 'b': unescaped = '\b'; (*inbuf)++; break;
-  case 'f': unescaped = '\f'; (*inbuf)++; break;
-    /*
-     * An end-of-line marker preceeded by backslash is not part of a
-     * literal string
-     */
-  case '\r':
-    unescaped = 0;
-    *valid    = 0;
-    *inbuf   += (*inbuf < inbufend - 1 && *(*inbuf+1) == '\n') ? 2 : 1;
-    break;
-  case '\n':
-    unescaped = 0;
-    *valid    = 0;
-    (*inbuf)++;
-    break;
-    /* Possibly octal notion */ 
-  default:
-    unescaped = ostrtouc(inbuf, inbufend, valid);
+  q = texpdf_parse_float_decimal(&p, endptr);
+  if (!q) {
+    *vp = 0.0; *pp = p;
+    return  -1;
   }
 
-  return unescaped;
+  v = atof(q);
+  RELEASE(q);
+
+  texpdf_skip_white(&p, endptr);
+  q = texpdf_parse_c_ident(&p, endptr);
+  if (q) {
+    char *qq = q; /* remember this for RELEASE, because q may be advanced */
+    if (strlen(q) >= strlen("true") &&
+        !memcmp(q, "true", strlen("true"))) {
+      u /= mag != 0.0 ? mag : 1.0; /* inverse magnify */
+      q += strlen("true");
+    }
+    if (strlen(q) == 0) { /* "true" was a separate word from the units */
+      RELEASE(qq);
+      texpdf_skip_white(&p, endptr);
+      qq = q = texpdf_parse_c_ident(&p, endptr);
+    }
+    if (q) {
+      for (k = 0; _ukeys[k] && strcmp(_ukeys[k], q); k++);
+      switch (k) {
+      case K_UNIT__PT: u *= 72.0 / 72.27; break;
+      case K_UNIT__IN: u *= 72.0; break;
+      case K_UNIT__CM: u *= 72.0 / 2.54 ; break;
+      case K_UNIT__MM: u *= 72.0 / 25.4 ; break;
+      case K_UNIT__BP: u *= 1.0 ; break;
+      case K_UNIT__PC: u *= 12.0 * 72.0 / 72.27 ; break;
+      case K_UNIT__DD: u *= 1238.0 / 1157.0 * 72.0 / 72.27 ; break;
+      case K_UNIT__CC: u *= 12.0 * 1238.0 / 1157.0 * 72.0 / 72.27 ; break;
+      case K_UNIT__SP: u *= 72.0 / (72.27 * 65536) ; break;
+      default:
+        WARN("Unknown unit of measure: %s", q);
+        error = -1;
+        break;
+      }
+      RELEASE(qq);
+    }
+    else {
+      WARN("Missing unit of measure after \"true\"");
+      error = -1;
+    }
+  }
+
+  *vp = v * u; *pp = p;
+  return  error;
+}
+
+#if defined(_MSC_VER)
+#define strtoll _strtoi64
+#endif
+
+/* If an environment variable SOURCE_DATE_EPOCH is correctly defined like
+ * SOURCE_DATE_EPOCH=1456304492, then returns this value, to be used as the
+ * 'current time', otherwise returns INVALID_EPOCH_VALUE (= (time_t)-1).
+ * In the case of Microsoft Visual Studio 2010, the value should be less
+ * than 32535291600.
+ */
+
+time_t
+dpx_util_get_unique_time_if_given(void)
+{
+  const char *source_date_epoch;
+  int64_t epoch;
+  char *endptr;
+  time_t ret = INVALID_EPOCH_VALUE;
+
+  source_date_epoch = getenv("SOURCE_DATE_EPOCH");
+  if (source_date_epoch) {
+    errno = 0;
+    epoch = strtoll(source_date_epoch, &endptr, 10);
+    if (!(epoch < 0 || *endptr != '\0' || errno != 0)) {
+      ret = (time_t) epoch;
+#if defined(_MSC_VER)
+      if (ret > 32535291599ULL)
+        ret = 32535291599ULL;
+#endif
+    }
+  }
+  return ret;
+}
+
+/*
+ * Docinfo
+ */
+#define TIME_STR_SIZE 30
+int
+dpx_util_format_asn_date (char *date_string, int need_timezone)
+{
+  int32_t     off, off_hours, off_mins;
+  time_t      current_time;
+  struct tm   bd_time, gmt;
+  size_t      size;
+
+  current_time = dpx_util_get_unique_time_if_given();
+  if (current_time == INVALID_EPOCH_VALUE) {
+    time(&current_time);
+    bd_time = *localtime(&current_time);
+  } else {
+    bd_time = *gmtime(&current_time);
+  }
+
+  size = strftime(date_string, TIME_STR_SIZE, "D:%Y%m%d%H%M%S", &bd_time);
+  /* expected format: "YYYYmmddHHMMSS" */
+  if (size == 0) {
+    /* unexpected, contents of date_string is undefined */
+    date_string[0] = '\0';
+    return 0;
+  }
+
+  /* correction for seconds: %S can be in range 00..61,
+     the PDF reference expects 00..59,
+     therefore we map "60" and "61" to "59" */
+  if (date_string[14] == '6') {
+    date_string[14] = '5';
+    date_string[15] = '9';
+    date_string[16] = '\0';    /* for safety */
+  }
+
+/* calculate the time zone offset in the same way as in texmfmp.c */
+  gmt = *gmtime(&current_time);
+  off = 60 * (bd_time.tm_hour - gmt.tm_hour) + bd_time.tm_min - gmt.tm_min;
+  if (bd_time.tm_year != gmt.tm_year) {
+    off += (bd_time.tm_year > gmt.tm_year) ? 1440 : -1440;
+  } else if (bd_time.tm_yday != gmt.tm_yday) {
+    off += (bd_time.tm_yday > gmt.tm_yday) ? 1440 : -1440;
+  }
+
+  if (need_timezone) {
+    if (off == 0) {
+      date_string[size++] = 'Z';
+      date_string[size] = 0;
+    } else {
+      off_hours = off / 60;
+      off_mins = abs(off - off_hours * 60);
+      sprintf(&date_string[size], "%+03d'%02d'", off_hours, off_mins);
+    }
+  } else {
+    date_string[size] = 0;
+  }
+
+  return (int)strlen(date_string);
 }
 
 void
@@ -159,6 +260,125 @@ texpdf_skip_white_spaces (unsigned char **s, unsigned char *endptr)
       break;
     else
       (*s)++;
+}
+
+void
+dpx_stack_init (dpx_stack *stack)
+{
+  stack->size   = 0;
+  stack->top    = NULL;
+  stack->bottom = NULL;
+}
+
+void
+dpx_stack_push (dpx_stack *stack, void *data)
+{
+  stack_elem  *elem;
+
+  ASSERT(stack);
+
+  elem = NEW(1, stack_elem);
+  elem->prev = stack->top;
+  elem->data = data;
+
+  stack->top = elem;
+  if (stack->size == 0)
+    stack->bottom = elem;
+
+  stack->size++;
+
+  return;
+}
+
+void *
+dpx_stack_pop (dpx_stack *stack)
+{
+  stack_elem *elem;
+  void       *data;
+
+  ASSERT(stack);
+
+  if (stack->size == 0)
+    return NULL;
+
+  data = stack->top->data;
+  elem = stack->top;
+  stack->top = elem->prev;
+  if (stack->size == 1)
+    stack->bottom = NULL;
+  RELEASE(elem);
+
+  stack->size--;
+
+  return data;
+}
+
+void *
+dpx_stack_top (dpx_stack *stack)
+{
+  void  *data;
+
+  ASSERT(stack);
+
+  if (stack->size == 0)
+    return NULL;
+
+  data = stack->top->data;
+
+  return data;
+}
+
+void *
+dpx_stack_at (dpx_stack *stack, int pos)
+{
+  void       *data = NULL;
+  stack_elem *elem;
+
+  if (stack->size == 0)
+    return NULL;
+
+  elem = stack->top;
+  while (pos > 0) {
+    elem = elem->prev;
+    pos--;
+  }
+  if (elem)
+    data = elem->data;
+  
+  return data;
+}
+
+void
+dpx_stack_roll (dpx_stack *stack, int n, int j)
+{
+  if (n > stack->size)
+    return;
+  if (n == 1)
+    return;
+  j = j % n;
+  if (j < 0)
+    j = n + j;
+  while (j-- > 0) {
+    int         m = n;
+    stack_elem *elem, *prev, *top;
+
+    elem = top = stack->top;
+    while (--m > 0) {
+      elem = elem->prev;
+    }
+    prev = elem->prev;
+    stack->top = top->prev;
+    elem->prev = top;
+    top->prev  = prev;
+  }
+}
+
+int
+dpx_stack_depth (dpx_stack *stack)
+{
+  ASSERT(stack);
+
+  return stack->size;
 }
 
 void
@@ -205,7 +425,7 @@ texpdf_ht_clear_table (struct ht_table *ht)
   ht->hval_free_fn = NULL;
 }
 
-long ht_table_size (struct ht_table *ht)
+int ht_table_size (struct ht_table *ht)
 {
   ASSERT(ht);
 
@@ -363,7 +583,7 @@ ht_set_iter (struct ht_table *ht, struct ht_iter *iter)
 {
   int    i;
 
-  ASSERT(ht && ht->table && iter);
+  ASSERT(ht && iter);
 
   for (i = 0; i < HASH_TABLE_SIZE; i++) {
     if (ht->table[i]) {

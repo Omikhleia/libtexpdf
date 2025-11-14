@@ -1,8 +1,10 @@
 /* This is dvipdfmx, an eXtended version of dvipdfm by Mark A. Wicks.
 
-    Copyright (C) 2002-2014 by Jin-Hwan Cho and Shunsaku Hirata,
+    Copyright (C) 2002-2020 by Jin-Hwan Cho and Shunsaku Hirata,
     the dvipdfmx project team.
     
+    Copyright (C) 2014-2025 by The SILE Typesetter (as libtexpdf).
+
     This program is free software; you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
     the Free Software Foundation; either version 2 of the License, or
@@ -24,11 +26,8 @@
 #include "pdfobj.h"
 #include "sfnt.h"
 
-extern void texpdf_tt_aux_set_verbose(void);
-extern void texpdf_tt_aux_set_always_embed(void);
-
 /* TTC (TrueType Collection) */
-extern ULONG    ttc_read_offset (sfnt *sfont, int ttc_idx);
+extern ULONG    ttc_read_offset (sfnt *sfont, ULONG ttc_idx);
 
 /* FontDescriptor */
 extern pdf_obj *tt_get_fontdesc (sfnt *sfont, int *embed, int stemv, int type, const char* fontname);
