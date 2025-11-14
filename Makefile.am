@@ -40,6 +40,8 @@ libtexpdf_la_SOURCES = \
 	cmap_write.h \
 	cs_type2.c \
 	cs_type2.h \
+	dpxconf.c \
+	dpxconf.h \
 	dpxcrypt.c \
 	dpxcrypt.h \
 	dpxfile.c \
@@ -90,6 +92,8 @@ libtexpdf_la_SOURCES = \
 	pdfresource.h \
 	pdfximage.c \
 	pdfximage.h \
+	pkfont.c \
+	pkfont.h \
 	pngimage.c \
 	pngimage.h \
 	pst.c \
@@ -100,10 +104,13 @@ libtexpdf_la_SOURCES = \
 	sfnt.h \
 	subfont.c \
 	subfont.h \
+	system.h \
 	t1_char.c \
 	t1_char.h \
 	t1_load.c \
 	t1_load.h \
+	tfm.c \
+	tfm.h \
 	truetype.c \
 	truetype.h \
 	tt_aux.c \
@@ -126,10 +133,6 @@ libtexpdf_la_SOURCES = \
 	type1c.h \
 	unicode.c \
 	unicode.h \
-	pkfont.c \
-	pkfont.h \
-	tfm.c \
-	tfm.h
 
 pkginclude_HEADERS = \
 	agl.h \
@@ -175,13 +178,16 @@ pkginclude_HEADERS = \
 	pdfresource.h \
 	pdftypes.h \
 	pdfximage.h \
+	pkfont.h \
 	pngimage.h \
 	pst.h \
 	pst_obj.h \
 	sfnt.h \
 	subfont.h \
+	system.h \
 	t1_char.h \
 	t1_load.h \
+	tfm.h \
 	truetype.h \
 	tt_aux.h \
 	tt_cmap.h \
@@ -192,8 +198,6 @@ pkginclude_HEADERS = \
 	type0.h \
 	type1.h \
 	type1c.h \
-	unicode.h \
-	pkfont.h \
-	tfm.h
+	unicode.h
 
 libtexpdf_la_LIBADD = $(LIBPNG_LIBS) $(ZLIB_LIBS) $(LIBPAPER_LIBS)
