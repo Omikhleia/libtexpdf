@@ -45,6 +45,12 @@ if (WIN32)
 	set(HAVE_LIBPNG 1)
 
 else()
+	find_path(KPATHSEA_INCLUDE_DIR kpathsea/kpathsea.h)
+	find_library(KPATHSEA_LIBRARY NAMES kpathsea)
+	if (NOT KPATHSEA_INCLUDE_DIR OR NOT KPATHSEA_LIBRARY)
+		message(FATAL_ERROR "Kpathsea headers and library are required")
+	endif()
+
 	find_package(PNG)
 	find_package(ZLIB)
 
@@ -84,22 +90,34 @@ set(PACKAGE_VERSION "\"${LIBTEXPDF_VERSION}\"")
 
 configure_file(config.h.cmake config.h)
 
-file(GLOB SRC_FILES *.c)
-file(GLOB HDR_FILES *.h)
+file(GLOB SRC_FILES dvipdfm-x/*.c)
+file(GLOB HDR_FILES dvipdfm-x/*.h)
+list(APPEND SRC_FILES libtexpdf.c)
+list(APPEND HDR_FILES libtexpdf.h)
 set(TEST_SRC library-poc.c)
-list(REMOVE_ITEM SRC_FILES ${TEST_SRC})
 
 add_library(libtexpdf STATIC ${SRC_FILES} ${HDR_FILES})
-add_dependencies(libtexpdf zlib libpng)
 target_compile_definitions(libtexpdf PUBLIC HAVE_CONFIG_H=1 CDECL=)
-target_compile_definitions(libtexpdf PRIVATE BUILDING_LIBTEXPDF=1)
+target_compile_definitions(libtexpdf PRIVATE BUILDING_LIBTEXPDF=1 XETEX=1 VERSION=\"${LIBTEXPDF_VERSION}\")
+target_include_directories(libtexpdf PUBLIC
+	"${CMAKE_CURRENT_SOURCE_DIR}"
+	"${CMAKE_CURRENT_SOURCE_DIR}/dvipdfm-x"
+)
+target_include_directories(libtexpdf PRIVATE "${CMAKE_CURRENT_BINARY_DIR}")
+if (WIN32 AND NOT MINGW)
+	target_compile_definitions(libtexpdf PRIVATE "off64_t=int64_t" "ftello=_ftelli64" "fseeko=_fseeki64")
+elseif (MINGW)
+	target_compile_definitions(libtexpdf PRIVATE "ftello=ftello64" "fseeko=fseeko64")
+endif()
 if (WIN32)
+	add_dependencies(libtexpdf zlib libpng)
 	target_include_directories(libtexpdf PUBLIC "${CMAKE_CURRENT_BINARY_DIR}" "${TMP_INSTALL_DIR}/include" "${CMAKE_CURRENT_SOURCE_DIR}/win32")
 	target_link_directories(libtexpdf PUBLIC "${TMP_INSTALL_DIR}/lib")
 	target_link_libraries(libtexpdf PUBLIC optimized zlibstatic debug zlibstaticd)
 	target_link_libraries(libtexpdf PUBLIC optimized libpng16_static debug libpng16_staticd)
 else()
-	target_link_libraries(libtexpdf PUBLIC ZLIB::ZLIB PNG::PNG)
+	target_include_directories(libtexpdf PUBLIC "${KPATHSEA_INCLUDE_DIR}")
+	target_link_libraries(libtexpdf PUBLIC ZLIB::ZLIB PNG::PNG "${KPATHSEA_LIBRARY}" m)
 endif()
 
 add_executable(libtexpdf_test ${TEST_SRC})

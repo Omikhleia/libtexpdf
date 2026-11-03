@@ -1,49 +1,97 @@
-/* Proof of concept for using the library.
+/* Minimal global-state API example: embed a native font and draw HIJKLMNO.
+ * Input is font-specific glyph IDs, not UTF-8 text.
+ */
 
-Compile and link:
-gcc -g -o library-poc  -I.. ./.libs/libtexpdf.a library-poc.c -lpng -lz `pkg-config --cflags --libs freetype2`
-
-./library-poc ./SomeFont.ttf
-
-*/
-
+#include <stdio.h>
 #include <stdint.h>
+#include <kpathsea/kpathsea.h>
 #include "libtexpdf.h"
 
-int load_font (char* filename) {
-  char fontmap_key[1024];
+static int load_font (const char *filename)
+{
   uint32_t index = 0;
   int layout_dir = 0;
   int extend = 65536;
   int slant = 0;
   int embolden = 0;
   double ptsize = 12.0 * 1.5;
-  fontmap_rec  *mrec;
-  
+
   return texpdf_dev_load_native_font(filename, index, ptsize, layout_dir, extend, slant, embolden);
 }
 
-int main(int argc, char** argv) {
+int main (int argc, char **argv)
+{
+  /* The current API requires two 16-byte PDF trailer IDs; use fixed POC values. */
+  static const unsigned char id1[16] = { 0 };
+  static const unsigned char id2[16] = { 0 };
+  struct pdf_setting settings = {
+    .ver_major = 1,
+    .ver_minor = 7,
+    .media_width = 595.275597,
+    .media_height = 841.889773,
+    .check_gotos = 1,
+    .device = {
+      .dvi2pts = 1.0,
+      .precision = 3
+    },
+    .object = {
+      .enable_objstm = 1,
+      .enable_predictor = 1,
+      .compression_level = 9
+    }
+  };
   pdf_rect mediabox;
+  /* These DejaVu Sans glyph IDs produce HIJKLMNO; IDs vary by font. */
+  static const uint16_t glyphs[] = { 43, 44, 45, 46, 47, 48, 49, 50 };
   int font_id;
-  pdf_doc *p = texpdf_open_document("test.pdf", 0, 595.275597, 841.8897728999999, 0,0,0);
-  texpdf_init_device(p, 1, 2, 0);
+
+  /* Require one font-file argument for this example. */
+  if (argc != 2) {
+    /* Show the required invocation. */
+    fprintf(stderr, "Usage: %s FONTFILE\n", argv[0]);
+    /* Report invalid command-line arguments. */
+    return 2;
+  }
+
+  /* Initialize Kpathsea as the normal dvipdfmx entry point does. */
+  kpse_set_program_name(argv[0], "dvipdfmx");
+
+  /* Initialize global font-map state before registering a font. */
+  texpdf_init_fontmaps();
+  /* Open the global PDF document; the API does not return a document pointer. */
+  texpdf_open_document("test.pdf", "libtexpdf POC", id1, id2, settings);
 
   mediabox.llx = 0.0;
   mediabox.lly = 0.0;
   mediabox.urx = 595.275597;
-  mediabox.ury = 841.8897728999999;
-  texpdf_doc_set_verbose();
-  texpdf_init_fontmaps();
-  texpdf_doc_set_mediabox(p, 0, &mediabox);
-  texpdf_doc_begin_page(p, 1.0,72.0,770.0);
+  /* Use the rounded A4 height matching the document defaults. */
+  mediabox.ury = 841.889773;
+  /* Set the root page box through the global document API. */
+  texpdf_doc_set_mediabox(0, &mediabox);
+  /* Begin a page with the standard one-inch origin. */
+  texpdf_doc_begin_page(1.0, 72.0, 770.0);
+
+  /* Load the native font and resolve its map key. */
   font_id = load_font(argv[1]);
-  printf("ID: %i\n", font_id);
-  texpdf_dev_set_string(p, 92.0,-10.0, "HIJKLMNO", 7, 0, font_id, 1);
+  /* Stop if the low-level font lookup fails. */
+  if (font_id < 0) {
+    /* Identify the font that failed to load. */
+    fprintf(stderr, "Could not load font: %s\n", argv[1]);
+    /* Close the active document on this error path. */
+    texpdf_close_document();
+    /* Release font-map state before returning. */
+    texpdf_close_fontmaps();
+    /* Report the font-loading failure to the caller. */
+    return 1;
+  }
+  /* Draw the selected glyphs using the resolved font ID. */
+  texpdf_dev_set_glyphs(92.0, -10.0, glyphs, (int) (sizeof(glyphs) / sizeof(glyphs[0])), 0, font_id);
+  /* Finish the page before closing the document. */
+  texpdf_doc_end_page();
+  /* Finalize and close the global PDF document. */
+  texpdf_close_document();
+  /* Release font-map records after document output. */
+  texpdf_close_fontmaps();
 
-    texpdf_doc_end_page(p);
-    texpdf_close_document(p);
-
-  texpdf_close_device  ();
-  texpdf_close_fontmaps();    
+  return 0;
 }

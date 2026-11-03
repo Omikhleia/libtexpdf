@@ -8,7 +8,7 @@ dnl   with or without modifications, as long as this notice is preserved.
 dnl
 AC_INIT([libtexpdf],[20140927],[tex-k@tug.org])
 AC_PREREQ([2.69])
-AC_CONFIG_SRCDIR([pdfdoc.c])
+AC_CONFIG_SRCDIR([dvipdfm-x/pdfdoc.c])
 AC_CONFIG_AUX_DIR([build-aux])
 AC_CONFIG_MACRO_DIR([build-aux])
 LT_INIT()
