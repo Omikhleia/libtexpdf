@@ -24,3 +24,11 @@ The upstream-derived implementation is kept in `dvipdfm-x/`; libtexpdf-specific
 API and build files remain at the repository root. See [MIGRATION.md](MIGRATION.md)
 for the manual upstream comparison workflow.
 
+## Resille with Kpathsea
+
+TEMPORARY HACK FOR RESILLE TO INCLUDE KPATHSEA SUPPORT
+
+```sh
+docker build --target build -t libtexpdf-poc-check .
+docker build -f Dockerfile.resille -t resille:with-kpathsea .
+```

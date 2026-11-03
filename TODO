@@ -1,1 +1,11 @@
 * Document everything
+
+Where we left Kpathsea:
+
+- **Fonts:** SILE uses Fontconfig and should pass the resolved font-file path. Native font records are registered in memory; absolute paths avoid Kpathsea font search. Relative names can still use it.
+- **Images:** `pdfximage.c` now uses the caller-supplied filename instead of `kpse_find_pict`. The caller must provide a usable path; `xstrdup` only makes an owned copy.
+- **Removed legacy support:** TFM/OFM and PK support have been removed.
+- **Other Kpathsea paths remain:** external font maps, CMaps, encodings, SFDs, AGL glyph lists, TeX headers, and relative font lookup. Identity-H/V are built in for the native-font path; AGL loading still happens during font initialization.
+- **Build status:** Docker and CMake still require Kpathsea. We haven’t established that all remaining lookup paths can be dropped.
+
+So we reduced the Kpathsea needs for SILE’s normal font and image paths, but haven’t removed the dependency overall.

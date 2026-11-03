@@ -1,4 +1,6 @@
 #include "libtexpdf.h"
+#include "system.h"
+#include "dpxconf.h"
 
 #include <stdint.h>
 #include <stdio.h>
@@ -260,6 +262,11 @@ int texpdf_foreach_dict(pdf_obj *dictionary, int (*callback)(pdf_obj *, pdf_obj 
 pdf_obj * texpdf_ximage_get_reference(int xobj_id)
 {
   return pdf_ximage_get_reference(xobj_id);
+}
+
+int texpdf_ximage_load_image(const char *ident, const char *filename, load_options options)
+{
+  return pdf_ximage_load_image(ident, filename, options);
 }
 
 void texpdf_ximage_init_image_info(ximage_info *info)
@@ -552,6 +559,46 @@ int texpdf_dev_rectclip(double x, double y, double width, double height)
   return pdf_dev_rectclip(x, y, width, height);
 }
 
+void texpdf_dev_set_rule(spt_t xpos, spt_t ypos, spt_t width, spt_t height)
+{
+  pdf_dev_set_rule(xpos, ypos, width, height);
+}
+
+void texpdf_dev_set_dirmode(int dir_mode)
+{
+  pdf_dev_set_dirmode(dir_mode);
+}
+
+int texpdf_dev_gsave(void)
+{
+  return pdf_dev_gsave();
+}
+
+int texpdf_dev_grestore(void)
+{
+  return pdf_dev_grestore();
+}
+
+int texpdf_dev_put_image(int xobj_id, transform_info *info, double ref_x, double ref_y, pdf_rect *rect)
+{
+  return pdf_dev_put_image(xobj_id, info, ref_x, ref_y, rect);
+}
+
+void texpdf_graphics_mode(void)
+{
+  graphics_mode();
+}
+
+void texpdf_setmatrix(pdf_tmatrix *matrix, double a, double b, double c, double d, double e, double f)
+{
+  pdf_setmatrix(matrix, a, b, c, d, e, f);
+}
+
+void texpdf_transform_info_clear(transform_info *info)
+{
+  transform_info_clear(info);
+}
+
 int texpdf_dev_flushpath(char path_type, int force)
 {
   return pdf_dev_flushpath(path_type, force);
@@ -600,6 +647,61 @@ void texpdf_doc_end_page(void)
 void texpdf_doc_set_mediabox(unsigned page_no, const pdf_rect *mediabox)
 {
   pdf_doc_set_mediabox(page_no, mediabox);
+}
+
+void texpdf_doc_add_page_content(const char *buffer, unsigned length)
+{
+  pdf_doc_add_page_content(buffer, length);
+}
+
+void texpdf_doc_add_page_resource(const char *category, const char *resource_name, pdf_obj *resource)
+{
+  pdf_doc_add_page_resource(category, resource_name, resource);
+}
+
+pdf_obj * texpdf_doc_current_page_resources(void)
+{
+  return pdf_doc_current_page_resources();
+}
+
+int texpdf_doc_current_page_number(void)
+{
+  return pdf_doc_current_page_number();
+}
+
+int texpdf_doc_add_names(const char *category, const void *key, int key_length, pdf_obj *value)
+{
+  return pdf_doc_add_names(category, key, key_length, value);
+}
+
+int texpdf_doc_bookmarks_up(void)
+{
+  return pdf_doc_bookmarks_up();
+}
+
+int texpdf_doc_bookmarks_down(void)
+{
+  return pdf_doc_bookmarks_down();
+}
+
+int texpdf_doc_bookmarks_depth(void)
+{
+  return pdf_doc_bookmarks_depth();
+}
+
+void texpdf_doc_bookmarks_add(pdf_obj *dictionary, int is_open)
+{
+  pdf_doc_bookmarks_add(dictionary, is_open);
+}
+
+void texpdf_doc_add_annot(unsigned page_no, const pdf_rect *rect, pdf_obj *annot, int new_annot)
+{
+  pdf_doc_add_annot(page_no, rect, annot, new_annot);
+}
+
+int texpdf_doc_add_page_annotation(pdf_obj *annot_ref)
+{
+  return pdf_doc_add_page_annotation(annot_ref);
 }
 
 pdf_obj * texpdf_doc_get_dictionary(const char *category)
@@ -697,6 +799,11 @@ int texpdf_get_version(void)
   return pdf_get_version();
 }
 
+const char *texpdf_library_version(void)
+{
+  return PACKAGE_VERSION;
+}
+
 pdf_file * texpdf_open(const char *filename, FILE *file)
 {
   return pdf_open(filename, file);
@@ -715,6 +822,11 @@ int texpdf_file_get_version(pdf_file *file)
 void texpdf_files_init(void)
 {
   pdf_files_init();
+}
+
+void texpdf_set_program_name(const char *argv0, const char *program_name)
+{
+  kpse_set_program_name(argv0, program_name);
 }
 
 void texpdf_files_close(void)
@@ -851,6 +963,11 @@ void texpdf_dev_set_glyphs(spt_t xpos, spt_t ypos, const uint16_t *glyph_ids, in
 
   pdf_dev_set_string(xpos, ypos, encoded_glyphs, glyph_count * 2, text_width, font_id);
   free(encoded_glyphs);
+}
+
+void texpdf_tt_aux_set_always_embed(void)
+{
+  dpx_conf.ignore_font_license = 1;
 }
 
 int texpdf_dev_load_native_font(const char *filename, uint32_t index, spt_t ptsize, int layout_dir, int extend, int slant, int embolden)

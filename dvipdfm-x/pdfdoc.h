@@ -126,6 +126,9 @@ extern void pdf_doc_set_mediabox(unsigned page_no, const pdf_rect *mediabox);
 extern void pdf_doc_add_page_content(const char *buffer, unsigned length);
 extern void pdf_doc_add_page_resource(const char *category,
                                       const char *resource_name, pdf_obj *resources);
+/* BEGIN LIBTEXPDF PATCH */
+extern int pdf_doc_add_page_annotation(pdf_obj *annot_ref);
+/* END LIBTEXPDF PATCH */
 
 /* Article thread */
 extern void pdf_doc_begin_article(const char *article_id, pdf_obj *info);

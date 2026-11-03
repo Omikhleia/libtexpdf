@@ -309,6 +309,27 @@ pdf_doc_close_catalog (pdf_doc *p)
 #define PAGECOUNT(p) (p->pages.num_entries)
 #define MAXPAGES(p)  (p->pages.max_entries)
 
+/* BEGIN LIBTEXPDF PATCH */
+int
+pdf_doc_add_page_annotation (pdf_obj *annot_ref)
+{
+  pdf_doc *p = &pdoc;
+  pdf_page *currentpage;
+
+  if (!annot_ref || !p->pages.entries)
+    return -1;
+
+  currentpage = LASTPAGE(p);
+  if (!currentpage->page_obj)
+    return -1;
+  if (!currentpage->annots)
+    currentpage->annots = pdf_new_array();
+  pdf_add_array(currentpage->annots, annot_ref);
+
+  return 0;
+}
+/* END LIBTEXPDF PATCH */
+
 static void
 doc_resize_page_entries (pdf_doc *p, int size)
 {

@@ -1,0 +1,10 @@
+FROM resille:latest
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends libkpathsea6 \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=libtexpdf-poc-check /usr/local/lib/ /usr/local/lib/
+COPY --from=libtexpdf-poc-check /usr/local/lib/lua/5.1/justenoughlibtexpdf.so /usr/lib/x86_64-linux-gnu/sile/justenoughlibtexpdf.so
+
+RUN ldconfig
