@@ -5,8 +5,6 @@
     
     Copyright (C) 1998, 1999 by Mark A. Wicks <mwicks@kettering.edu>
 
-    Copyright (C) 2014-2025 by The SILE Typesetter (as libtexpdf).
-
     This program is free software; you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
     the Free Software Foundation; either version 2 of the License, or
@@ -493,7 +491,7 @@ pdf_ximage_load_image (const char *ident, const char *filename, load_options opt
 /* MPS image support disabled */
   case IMAGE_TYPE_MPS:
     ERROR("libtexpdf does not support MPS images.");
-    break;
+      break;
 /* END LIBTEXPDF PATCH */
   default:
     id = load_image(ident, filename, fullname, format, fp, options);

@@ -4,8 +4,6 @@
 
    Before using, initialize the state by using init_genrand(seed)  
    or init_by_array(init_key, key_length).
-    Copyright (C) 2014-2025 by The SILE Typesetter (as libtexpdf).
-
 
    Copyright (C) 1997 - 2002, Makoto Matsumoto and Takuji Nishimura,
    All rights reserved.                          

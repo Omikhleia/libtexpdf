@@ -5,8 +5,6 @@
 
     Copyright (C) 1998, 1999 by Mark A. Wicks <mwicks@kettering.edu>
 
-    Copyright (C) 2014-2025 by The SILE Typesetter (as libtexpdf).
-
     This program is free software; you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
     the Free Software Foundation; either version 2 of the License, or
@@ -121,6 +119,21 @@ pst_new_obj (pst_type type, void *data)
   obj->type = type;
   obj->data = data;
 
+  switch (obj->type) {
+  case PST_TYPE_BOOLEAN:
+  case PST_TYPE_INTEGER:
+  case PST_TYPE_REAL:
+  case PST_TYPE_NAME:
+  case PST_TYPE_STRING:
+  case PST_TYPE_NULL:
+  case PST_TYPE_MARK:
+  case PST_TYPE_UNKNOWN:
+    if (data == NULL)
+      ERROR("NULL pointer data for object type: %d", obj->type);
+    break;
+  default:
+    ERROR("Unrecognized object type: %d", obj->type);
+  }
   return obj;
 }
 

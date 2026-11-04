@@ -5,8 +5,6 @@
 
     Copyright (C) 1998, 1999 by Mark A. Wicks <mwicks@kettering.edu>
 
-    Copyright (C) 2014-2025 by The SILE Typesetter (as libtexpdf).
-
     This program is free software; you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
     the Free Software Foundation; either version 2 of the License, or
@@ -34,8 +32,6 @@
 static char *my_name = "libtexpdf";
 /* END LIBTEXPDF PATCH */
 #include "error.h"
-#include "pdfobj.h"
-#include "pdfximage.h"
 
 #define DPX_MESG        0
 #define DPX_MESG_WARN   1
@@ -86,12 +82,14 @@ WARN (const char *fmt, ...)
   }
 }
 
+/* BEGIN LIBTEXPDF PATCH */
 void
 error_cleanup (void)
 {
   pdf_error_cleanup_cache();
   pdf_error_cleanup();
 }
+/* END LIBTEXPDF PATCH */
 
 void
 ERROR (const char *fmt, ...)

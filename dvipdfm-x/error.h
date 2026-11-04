@@ -5,8 +5,6 @@
     
     Copyright (C) 1998, 1999 by Mark A. Wicks <mwicks@kettering.edu>
 
-    Copyright (C) 2014-2025 by The SILE Typesetter (as libtexpdf).
-
     This program is free software; you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
     the Free Software Foundation; either version 2 of the License, or
@@ -29,7 +27,7 @@
 
 extern void error_cleanup (void);
 
-/* Acoid conflict with NO_ERROR from <winerror.h>.  */
+/* Avoid conflict with NO_ERROR from <winerror.h>.  */
 #undef NO_ERROR
 
 #define FATAL_ERROR -1
@@ -40,7 +38,7 @@ extern void error_cleanup (void);
 
 extern void shut_up (int quietness);
 
-/* Acoid conflict with ERROR from <winnt.h>.  */
+/* Avoid conflict with ERROR from <winnt.h>.  */
 #undef ERROR
 
 extern void ERROR (const char *fmt, ...);

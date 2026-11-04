@@ -1,11 +1,9 @@
 /* This is dvipdfmx, an eXtended version of dvipdfm by Mark A. Wicks.
 
-    Copyright (C) 2002-2020 by Jin-Hwan Cho and Shunsaku Hirata,
+    Copyright (C) 2002-2025 by Jin-Hwan Cho and Shunsaku Hirata,
     the dvipdfmx project team.
     
     Copyright (C) 1998, 1999 by Mark A. Wicks <mwicks@kettering.edu>
-
-    Copyright (C) 2014-2025 by The SILE Typesetter (as libtexpdf).
 
     This program is free software; you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -3648,7 +3646,8 @@ pdf_get_object (pdf_file *pf, uint32_t obj_num, uint16_t obj_gen)
 
     length = pdf_stream_length(objstm);
     p = (const char *) pdf_stream_dataptr(objstm) + first + data[2*index+1];
-    q = p + (index == n-1 ? length : first+data[2*index+3]);
+    q = (const char *) pdf_stream_dataptr(objstm)
+                       + (index == n-1 ? length : first+data[2*index+3]);
     result = parse_pdf_object(&p, q, pf);
     if (!result)
       goto error;

@@ -5,8 +5,6 @@
 
     Copyright (C) 1998, 1999 by Mark A. Wicks <mwicks@kettering.edu>
 
-    Copyright (C) 2014-2025 by The SILE Typesetter (as libtexpdf).
-
     This program is free software; you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
     the Free Software Foundation; either version 2 of the License, or
@@ -55,7 +53,7 @@ extern unsigned char  *pst_getSV (pst_obj *obj);
 extern void    *pst_data_ptr (pst_obj *obj);
 
 #define PST_NAME_LEN_MAX   127
-#define PST_STRING_LEN_MAX 4096
+#define PST_STRING_LEN_MAX 32767
 #define PST_MAX_DIGITS     10
 #define PST_TOKEN_LEN_MAX  PST_STRING_LEN_MAX
 

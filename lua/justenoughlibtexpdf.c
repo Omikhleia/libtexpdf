@@ -39,7 +39,12 @@ int je_pdf_init (lua_State *L) {
   settings.ver_minor = 7;
   settings.media_width = w;
   settings.media_height = height;
-  settings.check_gotos = 1;
+  /* Note on disabling check_gotos:
+   * Resilient 4.x adds /GoTo annotations directly to /Annots, bypassing
+   * pdf_doc_add_goto(). Disable destination optimization so those links keep
+   * their original named targets.
+   */
+  settings.check_gotos = 0;
   settings.device.dvi2pts = 1.0 / precision;
   settings.device.precision = 2;
   settings.object.enable_objstm = 1;
