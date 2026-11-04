@@ -28,7 +28,10 @@
 #include "gnu-miktex.h"
 #include <miktex/KPSE/Emulation>
 #else
-#include <kpathsea/kpathsea.h>
+/* BEGIN LIBTEXPDF PATCH */
+/* #include <kpathsea/kpathsea.h> */
+#include "kpathsea_shim.h"
+/* END LIBTEXPDF PATCH */
 #endif
 
 #ifdef WIN32

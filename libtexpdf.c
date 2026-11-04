@@ -824,11 +824,6 @@ void texpdf_files_init(void)
   pdf_files_init();
 }
 
-void texpdf_set_program_name(const char *argv0, const char *program_name)
-{
-  kpse_set_program_name(argv0, program_name);
-}
-
 void texpdf_files_close(void)
 {
   pdf_files_close();

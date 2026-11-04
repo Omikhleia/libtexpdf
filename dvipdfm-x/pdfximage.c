@@ -391,14 +391,7 @@ load_image (const char *ident, const char *filename, const char *fullname, int f
 }
 
 
-/* BEGIN LIBTEXPDF PATCH */
-// #define dpx_find_file(n,d,s) (kpse_find_pict((n)))
-/* SILE resolves image paths, we do not rely on kpse_find_pict.
- * The latter however returned an allocated path.
- * Later on, it is freed with RELEASE(fullname), so we need to allocate it ourselves.
- */
-#define dpx_find_file(n,d,s) (xstrdup((n)))
-/* END LIBTEXPDF PATCH */
+#define dpx_find_file(n,d,s) (kpse_find_pict((n)))
 #define dpx_fopen(n,m) (MFOPEN((n),(m)))
 #define dpx_fclose(f)  (MFCLOSE((f)))
 

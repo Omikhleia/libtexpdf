@@ -4,7 +4,6 @@
 
 #include <stdio.h>
 #include <stdint.h>
-#include <kpathsea/kpathsea.h>
 #include "libtexpdf.h"
 
 static int load_font (const char *filename)
@@ -52,9 +51,6 @@ int main (int argc, char **argv)
     /* Report invalid command-line arguments. */
     return 2;
   }
-
-  /* Initialize Kpathsea as the normal dvipdfmx entry point does. */
-  kpse_set_program_name(argv[0], "dvipdfmx");
 
   /* Initialize global font-map state before registering a font. */
   texpdf_init_fontmaps();

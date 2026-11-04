@@ -55,7 +55,6 @@ int je_pdf_init (lua_State *L) {
   mediabox.lly = 0.0;
   mediabox.urx = w;
   mediabox.ury = height;
-  texpdf_set_program_name("sile", "dvipdfmx");
   texpdf_init_fontmaps();
   texpdf_tt_aux_set_always_embed();
   texpdf_open_document(fn, NULL, id1, id2, settings);
@@ -397,59 +396,6 @@ int je_pdf_drawimage(lua_State *L) {
   return 0;
 }
 
-static int get_image_bbox(FILE *file, long page_no, double *llx, double *lly,
-                          double *urx, double *ury, double *xresol, double *yresol)
-{
-  (void) file;
-  (void) page_no;
-  (void) llx;
-  (void) lly;
-  (void) urx;
-  (void) ury;
-  (void) xresol;
-  (void) yresol;
-  return -1;
-}
-
-int je_pdf_imagebbox(lua_State *L) {
-  const char* filename = luaL_checkstring(L, 1);
-  long page_no = (long)luaL_checkinteger(L, 2);
-  double llx = 0;
-  double lly = 0;
-  double urx = 0;
-  double ury = 0;
-  double xresol = 0;
-  double yresol = 0;
-
-  FILE* f = MFOPEN(filename, FOPEN_RBIN_MODE);
-  if (!f) {
-    return luaL_error(L, "Image file not found %s", filename);
-  }
-
-  if ( get_image_bbox(f, page_no, &llx, &lly, &urx, &ury, &xresol, &yresol) < 0 ) {
-    MFCLOSE(f);
-    return luaL_error(L, "Invalid image file %s", filename);
-  }
-
-  MFCLOSE(f);
-
-  lua_pushnumber(L, llx);
-  lua_pushnumber(L, lly);
-  lua_pushnumber(L, urx);
-  lua_pushnumber(L, ury);
-  if (xresol == 0) {
-    lua_pushnil(L);
-  } else {
-    lua_pushnumber(L, xresol);
-  }
-  if (yresol == 0) {
-    lua_pushnil(L);
-  } else {
-    lua_pushnumber(L, yresol);
-  }
-  return 6;
-}
-
 int je_pdf_transform(lua_State *L) {
   pdf_tmatrix matrix;
   double a = luaL_checknumber(L, 1);
@@ -654,7 +600,6 @@ static const struct luaL_Reg lib_table [] = {
   {"setcolor_cmyk", je_pdf_setcolor_cmyk},
   {"setcolor_gray", je_pdf_setcolor_gray},
   {"drawimage", je_pdf_drawimage},
-  {"imagebbox", je_pdf_imagebbox},
   {"colorpop", je_pdf_colorpop},
   {"colorpush_rgb", je_pdf_colorpush_rgb},
   {"colorpush_cmyk", je_pdf_colorpush_cmyk},

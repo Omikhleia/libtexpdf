@@ -44,7 +44,10 @@
 #include "dpxcrypt.h"
 #define MAX_KEY_LEN 16
 
-#include <kpathsea/lib.h>
+/* BEGIN LIBTEXPDF PATCH */
+// #include <kpathsea/lib.c>
+#include "../kpathsea_shim.h"
+/* END LIBTEXPDF PATCH */
 #include <string.h>
 #ifdef WIN32
 #include <io.h>
@@ -401,9 +404,13 @@ insistupdate (const char      *filename,
               kpse_file_format_type foolformat,
               kpse_file_format_type realformat)
 {
-#if defined(MIKTEX)
-  /* users are not fools */
-#else
+/* BEGIN LIBTEXPDF PATCH */
+  (void) filename;
+  (void) fqpn;
+  (void) foolname;
+  (void) foolformat;
+  (void) realformat;
+#if 0
   kpse_format_info_type *fif;
   kpse_format_info_type *fir;
   if (dpx_conf.verbose_level < 1)
@@ -421,6 +428,7 @@ insistupdate (const char      *filename,
   WARN(">>   %s", fir->default_path);
   WARN(">> Please read \"README\" file.");
 #endif
+/* END LIBTEXPDF PATCH */
 }
 
 static char *

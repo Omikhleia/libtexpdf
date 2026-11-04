@@ -13,6 +13,8 @@ libtexpdf_la_LDFLAGS = -no-undefined -export-symbols-regex '^texpdf_'
 AM_CFLAGS = $(WARNING_CFLAGS)
 
 libtexpdf_la_SOURCES = \
+	kpathsea_shim.c \
+	kpathsea_shim.h \
 	libtexpdf.c \
 	dvipdfm-x/agl.c \
 	dvipdfm-x/agl.h \
@@ -132,6 +134,8 @@ libtexpdf_la_SOURCES = \
 	dvipdfm-x/unicode.h
 
 pkginclude_HEADERS = \
+	libtexpdf.h \
+	kpathsea_shim.h \
 	dvipdfm-x/agl.h \
 	dvipdfm-x/bmpimage.h \
 	dvipdfm-x/cff.h \
@@ -156,7 +160,6 @@ pkginclude_HEADERS = \
 	dvipdfm-x/fontmap.h \
 	dvipdfm-x/jp2image.h \
 	dvipdfm-x/jpegimage.h \
-	libtexpdf.h \
 	dvipdfm-x/mem.h \
 	dvipdfm-x/mfileio.h \
 	dvipdfm-x/numbers.h \

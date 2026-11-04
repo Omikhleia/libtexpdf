@@ -276,7 +276,6 @@ pdf_file * texpdf_open(const char *filename, FILE *file);
 void texpdf_close(pdf_file *file);
 int texpdf_file_get_version(pdf_file *file);
 void texpdf_files_init(void);
-void texpdf_set_program_name(const char *argv0, const char *program_name);
 void texpdf_files_close(void);
 void texpdf_init_encodings(void);
 void texpdf_close_encodings(void);

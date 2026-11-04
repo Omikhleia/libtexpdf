@@ -5,7 +5,6 @@ RUN apt-get update \
         autoconf \
         automake \
         build-essential \
-        libkpathsea-dev \
         libluajit-5.1-dev \
         libpng-dev \
         libtool \
@@ -20,7 +19,7 @@ COPY build-aux/ build-aux/
 COPY lua/ lua/
 
 RUN autoreconf -fi \
-    && ./configure --prefix=/usr/local --enable-shared --disable-static LIBS=-lkpathsea \
+    && ./configure --prefix=/usr/local --enable-shared --disable-static \
     && make -j"$(nproc)" \
     && make check \
     && make install \
@@ -36,7 +35,7 @@ RUN mkdir -p /usr/local/lib/lua/5.1 \
 FROM ubuntu:24.04
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends libkpathsea6 libluajit-5.1-2 libpng16-16t64 zlib1g \
+    && apt-get install -y --no-install-recommends libluajit-5.1-2 libpng16-16t64 zlib1g \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=build /usr/local/ /usr/local/
